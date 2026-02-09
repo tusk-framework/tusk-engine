@@ -1,10 +1,32 @@
-/vendor
+# --- Go ---
 /bin
-/build
+/dist
+/vendor
+*.exe
+*.test
+*.prof
+go.work
+
+# Binaries
+tusk
+tusk.exe
+
+# --- Tusk Engine ---
+.tusk/
+config.json
+*.log
+
+# --- PHP ---
+/vendor
 composer.lock
 .phpunit.result.cache
-.env
-*.log
-.idea
-.vscode
+
+# --- IDEs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- System ---
 .DS_Store
+Thumbs.db

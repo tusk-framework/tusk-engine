@@ -1,17 +1,52 @@
-# Tusk Native Engine
+# Tusk Native Engine (v0.1)
 
-This directory contains the source and documentation for the **Tusk Native Engine**.
+The **Tusk Native Engine** is the high-performance application server for the Tusk Framework. It replaces `php-fpm` and `nginx` with a single, self-contained binary written in Go.
 
-## What is this?
-The Tusk Native Engine is a high-performance **Master Process Runner** (typically written in Go or Rust). It manages the lifecycle of PHP workers and handles the heavy lifting of networking and process supervision.
+## Features
 
-## Role in the Ecosystem
-- **Isolation**: Keeps the PHP workers safe from network failures.
-- **Performance**: Handles concurrency at the native level.
-- **Portability**: Enables zero-configuration deployment via a single binary.
+- **⚡ High Performance**: Uses Go's `net/http` for event-driven networking and standard I/O pipes for communicating with PHP workers.
+- **📦 Portable**: Can download and manage its own PHP runtime (Sidecar mode), requiring zero system dependencies.
+- **🛠️ Unified CLI**: The `tusk` binary handles both server management (`tusk start`) and framework commands (`tusk make:controller`), acting as a transparent proxy.
+- **⚙️ Dynamic Config**: Automatically loads settings from `tusk.json` (Port, Worker Count, PHP Path).
+- **🛡️ Process Management**: Automatically supervises PHP workers, restarting them if they crash.
 
-## Current Status
-This component is currently in the **Spec Phase**. The current runtime uses a PHP-based stub for local development and architecture proofing.
+## Architecture
 
----
-*Part of the Tusk Framework.*
+```text
+┌───────────────────────────────┐
+│        Tusk Engine (Go)       │
+│  [HTTP Server] ──▶ [Pool]     │
+└──────────────┬────────────────┘
+               │ (stdin/stdout)
+       ┌───────▼───────┐
+       │  PHP Worker   │
+       │  (Framework)  │
+       └───────────────┘
+```
+
+## Getting Started
+
+### 1. Build
+```bash
+go build -o tusk.exe ./cmd/tusk
+```
+
+### 2. Configure (Optional)
+Create a `tusk.json` in your project root:
+```json
+{
+    "port": 8080,
+    "worker_count": 4,
+    "php_binary": "php"
+}
+```
+
+### 3. Run
+```bash
+./tusk.exe start
+```
+
+## Protocol (NDJSON)
+The engine communicates with PHP workers using Newline Delimited JSON.
+- **Request**: `{ "method": "GET", "url": "/", "headers": {...}, "body": "..." }`
+- **Response**: `{ "status": 200, "headers": {...}, "body": "..." }`
