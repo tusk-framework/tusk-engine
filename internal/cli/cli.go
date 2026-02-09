@@ -35,6 +35,8 @@ func Run(args []string) {
 	switch command {
 	case "start":
 		runServerWithConfig(cfg)
+	case "setup":
+		runSetup(cfg)
 	case "help":
 		printHelp()
 	default:
@@ -47,10 +49,30 @@ func printHelp() {
 	fmt.Println("Tusk Native Engine (v0.1)")
 	fmt.Println("\nUsage:")
 	fmt.Println("  tusk start       Start the Application Server")
+	fmt.Println("  tusk setup       Verify and setup environment")
 	fmt.Println("  tusk [command]   Run a framework command or script")
 	fmt.Println("\nExamples:")
 	fmt.Println("  tusk start")
 	fmt.Println("  tusk migrate")
+}
+
+func runSetup(cfg *config.Config) {
+	fmt.Println("--- Tusk Environment Setup ---")
+
+	// 1. Check PHP
+	mgr, err := php.NewManager(cfg.PhpBinary)
+	if err != nil {
+		fmt.Printf("PHP Error: %v\n", err)
+		fmt.Println("Tip: Install PHP or set 'php_binary' in tusk.json")
+	} else {
+		fmt.Printf("PHP Found: %s\n", mgr.BinaryPath)
+	}
+
+	// 2. Check Paths
+	cwd, _ := os.Getwd()
+	fmt.Printf("Project Root: %s\n", cwd)
+
+	fmt.Println("\nTusk is ready to go!")
 }
 
 func runServerWithConfig(cfg *config.Config) {

@@ -1,4 +1,4 @@
-# 🐘 TUSK Native Engine Specification (v0.1)
+# TUSK Native Engine Specification (v0.1)
 
 ## Overview
 The **Tusk Native Engine** is the application server backbone of the Tusk Framework. It serves as the **Master Process** that manages the PHP lifecycle, providing a robust, long-running runtime environment.

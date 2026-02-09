@@ -8,8 +8,8 @@
 go.work
 
 # Binaries
-tusk
-tusk.exe
+/tusk
+/tusk.exe
 
 # --- Tusk Engine ---
 .tusk/
