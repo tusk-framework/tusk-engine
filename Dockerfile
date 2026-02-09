@@ -15,15 +15,27 @@ COPY . .
 RUN go build -o tusk ./cmd/tusk
 
 # Runtime Stage
-FROM alpine:latest
+FROM alpine:3.19
 
 WORKDIR /app
 
 # Install PHP for the worker (and extensions as needed)
-RUN apk add --no-cache php82 php82-ctype php82-curl php82-dom php82-fileinfo php82-json php82-mbstring php82-openssl php82-pdo php82-phar php82-session php82-xml php82-tokenizer
+RUN apk add --no-cache \
+    php82 \
+    php82-ctype \
+    php82-curl \
+    php82-dom \
+    php82-fileinfo \
+    php82-mbstring \
+    php82-openssl \
+    php82-pdo \
+    php82-phar \
+    php82-session \
+    php82-xml \
+    php82-tokenizer
 
 # Link php82 to php
-RUN ln -s /usr/bin/php82 /usr/bin/php
+RUN ln -sf /usr/bin/php82 /usr/bin/php
 
 # Copy Engine Binary
 COPY --from=builder /app/tusk /usr/local/bin/tusk
