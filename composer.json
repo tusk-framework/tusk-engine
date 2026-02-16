@@ -1,0 +1,21 @@
+{
+    "name": "tusk-framework/example-app",
+    "description": "Example Tusk application",
+    "type": "project",
+    "require": {
+        "php": "^8.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "dev": "tusk start",
+        "serve": "tusk start"
+    }
+}

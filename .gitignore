@@ -15,6 +15,7 @@ go.work
 .tusk/
 config.json
 *.log
+custom-worker.php
 
 # --- PHP ---
 /vendor
