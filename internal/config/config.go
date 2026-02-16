@@ -35,13 +35,15 @@ type Config struct {
 	Conflict     map[string]string            `json:"conflict,omitempty"`
 	Replace      map[string]string            `json:"replace,omitempty"`
 	Provide      map[string]string            `json:"provide,omitempty"`
-	Suggest      map[string]string            `json:"suggest,omitempty"`
-	Autoload     map[string]map[string]string `json:"autoload,omitempty"`
-	AutoloadDev  map[string]map[string]string `json:"autoload-dev,omitempty"`
-	Bin          interface{}                  `json:"bin,omitempty"` // Can be string or array
-	Extra        map[string]interface{}       `json:"extra,omitempty"`
-	Config       map[string]interface{}       `json:"config,omitempty"`
-	Repositories []interface{}                `json:"repositories,omitempty"`
+	Suggest          map[string]string            `json:"suggest,omitempty"`
+	Autoload         map[string]map[string]string `json:"autoload,omitempty"`
+	AutoloadDev      map[string]map[string]string `json:"autoload-dev,omitempty"`
+	MinimumStability string                       `json:"minimum-stability,omitempty"`
+	PreferStable     bool                         `json:"prefer-stable,omitempty"`
+	Bin              interface{}                  `json:"bin,omitempty"` // Can be string or array
+	Extra            map[string]interface{}       `json:"extra,omitempty"`
+	Config           map[string]interface{}       `json:"config,omitempty"`
+	Repositories     []interface{}                `json:"repositories,omitempty"`
 }
 
 // Author represents a package author
@@ -187,6 +189,12 @@ func loadComposerConfig(cfg *Config) {
 	if composer.AutoloadDev != nil {
 		cfg.AutoloadDev = composer.AutoloadDev
 	}
+
+	// Merge stability preferences (root-only fields)
+	if composer.MinimumStability != "" {
+		cfg.MinimumStability = composer.MinimumStability
+	}
+	cfg.PreferStable = composer.PreferStable
 
 	// Merge other important fields
 	if composer.Bin != nil {

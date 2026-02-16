@@ -69,9 +69,9 @@ func Run(args []string) {
 		runInit()
 	case "run":
 		// Explicit command to run scripts from tusk.json or composer.json
-		// Usage: tusk run <script-name>
+		// Usage: tusk run <script>
 		if len(args) < 3 {
-			log.Fatalf("Usage: tusk run <script-name>")
+			log.Fatalf("Usage: tusk run <script>")
 		}
 		scriptName := args[2]
 		if script, ok := cfg.Scripts[scriptName]; ok {
