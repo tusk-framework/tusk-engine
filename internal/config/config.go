@@ -179,7 +179,7 @@ func loadComposerConfig(cfg *Config) {
 	if composer.Suggest != nil {
 		cfg.Suggest = composer.Suggest
 	}
-	
+
 	// Merge autoload configurations
 	if composer.Autoload != nil {
 		cfg.Autoload = composer.Autoload
@@ -187,7 +187,7 @@ func loadComposerConfig(cfg *Config) {
 	if composer.AutoloadDev != nil {
 		cfg.AutoloadDev = composer.AutoloadDev
 	}
-	
+
 	// Merge other important fields
 	if composer.Bin != nil {
 		cfg.Bin = composer.Bin
