@@ -36,7 +36,16 @@ func Run(args []string) {
 	case "start":
 		// Check if a custom worker file is specified
 		if len(args) > 2 {
-			cfg.WorkerCommand = args[2]
+			workerFile := args[2]
+			// Validate the worker file exists
+			if _, err := os.Stat(workerFile); os.IsNotExist(err) {
+				log.Fatalf("Worker file not found: %s", workerFile)
+			}
+			// Validate it has a .php extension
+			if !strings.HasSuffix(strings.ToLower(workerFile), ".php") {
+				log.Fatalf("Worker file must be a PHP file (*.php): %s", workerFile)
+			}
+			cfg.WorkerCommand = workerFile
 		}
 		runServerWithConfig(cfg)
 	case "setup":

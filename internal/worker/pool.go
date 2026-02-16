@@ -77,6 +77,11 @@ func (p *Pool) spawnWorker(id int) error {
 		workerScript = filepath.Join(p.cfg.ProjectRoot, workerScript)
 	}
 
+	// Validate worker script exists before attempting to spawn
+	if _, err := os.Stat(workerScript); os.IsNotExist(err) {
+		return fmt.Errorf("worker script not found: %s", workerScript)
+	}
+
 	// Construct arguments
 	args := []string{workerScript}
 
