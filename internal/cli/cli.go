@@ -31,9 +31,11 @@ func Run(args []string) {
 	// 2. Check for built-in commands first (they take priority over scripts)
 	switch command {
 	case "start", "dev":
-		// "dev" is an alias for "start" - use tusk's server instead of php -S
+		// Both commands start tusk's high-performance server with worker pool
+		// "dev" is an alias for "start" to provide familiar npm/bun-style experience
+		// Use tusk's server instead of php -S for stateful workers and better performance
 		// Check if a custom worker file is specified
-		// args[0] = binary name, args[1] = "start", args[2] = optional worker file
+		// args[0] = binary name, args[1] = "start"/"dev", args[2] = optional worker file
 		if len(args) >= 3 {
 			workerFile := args[2]
 			// Validate the worker file exists

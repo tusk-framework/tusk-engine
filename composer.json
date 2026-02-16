@@ -15,6 +15,7 @@
     },
     "scripts": {
         "test": "phpunit",
-        "dev": "tusk start"
+        "dev": "tusk start",
+        "serve": "tusk start"
     }
 }
