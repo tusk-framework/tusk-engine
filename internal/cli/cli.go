@@ -102,7 +102,7 @@ func runServerWithConfig(cfg *config.Config) {
 		workerPath = absPath
 	}
 	log.Printf("Starting server with worker: %s", workerPath)
-	
+
 	// 2. Initialize Worker Pool
 	pool, err := worker.NewPool(cfg)
 	if err != nil {
