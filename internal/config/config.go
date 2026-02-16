@@ -27,14 +27,14 @@ type Config struct {
 	Type         string                       `json:"type,omitempty"`
 	Version      string                       `json:"version,omitempty"`
 	Keywords     []string                     `json:"keywords,omitempty"`
-	Homepage     string                       `json:"homepage,omitempty"`
-	License      interface{}                  `json:"license,omitempty"` // Can be string or array
-	Authors      []Author                     `json:"authors,omitempty"`
-	Require      map[string]string            `json:"require,omitempty"`
-	RequireDev   map[string]string            `json:"require-dev,omitempty"`
-	Conflict     map[string]string            `json:"conflict,omitempty"`
-	Replace      map[string]string            `json:"replace,omitempty"`
-	Provide      map[string]string            `json:"provide,omitempty"`
+	Homepage         string                       `json:"homepage,omitempty"`
+	License          interface{}                  `json:"license,omitempty"` // Can be string or array
+	Authors          []Author                     `json:"authors,omitempty"`
+	Require          map[string]string            `json:"require,omitempty"`
+	RequireDev       map[string]string            `json:"require-dev,omitempty"`
+	Conflict         map[string]string            `json:"conflict,omitempty"`
+	Replace          map[string]string            `json:"replace,omitempty"`
+	Provide          map[string]string            `json:"provide,omitempty"`
 	Suggest          map[string]string            `json:"suggest,omitempty"`
 	Autoload         map[string]map[string]string `json:"autoload,omitempty"`
 	AutoloadDev      map[string]map[string]string `json:"autoload-dev,omitempty"`
