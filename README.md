@@ -66,7 +66,7 @@ Create or edit `tusk.json` in your project root:
     "php_binary": "php",
     "worker_command": "worker.php",
     "scripts": {
-        "dev": "php -S localhost:8000",
+        "dev": "tusk start",
         "test": "phpunit"
     }
 }
@@ -80,7 +80,7 @@ Create or edit `tusk.json` in your project root:
         "php": "^8.0"
     },
     "scripts": {
-        "dev": "php -S localhost:8000",
+        "dev": "tusk start",
         "test": "phpunit"
     }
 }
@@ -126,6 +126,31 @@ tusk start custom-worker.php
 > You can customize the worker file in two ways:
 > 1. **Command-line**: `tusk start my-worker.php` (takes precedence)
 > 2. **Config file**: Set `"worker_command": "my-worker.php"` in `tusk.json`
+
+## Why Use Tusk Server Instead of php -S?
+
+Tusk's built-in server is **much more powerful** than PHP's development server (`php -S`):
+
+### ⚡ Performance & Features
+- **Stateful Workers**: Unlike `php -S` which creates a new process per request, tusk maintains a pool of long-running PHP workers
+- **State Management**: Workers keep state between requests - perfect for caching, connection pooling, and performance
+- **Auto-Restart**: Workers automatically restart if they crash
+- **Concurrent Requests**: Handle multiple requests simultaneously with a worker pool
+- **Production-Ready**: Same server for development and production
+
+### 📝 Use Tusk Server in Scripts
+Replace `php -S localhost:8000` with `tusk start` or `tusk dev`:
+
+```json
+{
+  "scripts": {
+    "dev": "tusk start",        // ✅ Use tusk's powerful server
+    "old": "php -S localhost:8000"  // ❌ Don't use PHP's simple server
+  }
+}
+```
+
+The `tusk dev` command is an alias for `tusk start` - both start the high-performance tusk server.
 
 ## All-in-One Package Management
 

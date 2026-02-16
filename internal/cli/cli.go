@@ -28,14 +28,10 @@ func Run(args []string) {
 
 	command := args[1]
 
-	// 2. Check for scripts (npm-style)
-	if script, ok := cfg.Scripts[command]; ok {
-		runScript(script, args[2:])
-		return
-	}
-
+	// 2. Check for built-in commands first (they take priority over scripts)
 	switch command {
-	case "start":
+	case "start", "dev":
+		// "dev" is an alias for "start" - use tusk's server instead of php -S
 		// Check if a custom worker file is specified
 		// args[0] = binary name, args[1] = "start", args[2] = optional worker file
 		if len(args) >= 3 {
@@ -72,7 +68,12 @@ func Run(args []string) {
 	case "help":
 		printHelp()
 	default:
-		// Proxy everything else to the PHP CLI
+		// 3. Check for scripts (npm-style) if not a built-in command
+		if script, ok := cfg.Scripts[command]; ok {
+			runScript(script, args[2:])
+			return
+		}
+		// 4. Proxy everything else to the PHP CLI
 		proxyToPHPWithConfig(cfg, args[1:])
 	}
 }
@@ -81,6 +82,7 @@ func printHelp() {
 	fmt.Println("Tusk Native Engine (v0.1)")
 	fmt.Println("\nUsage:")
 	fmt.Println("  tusk start [worker-file]  Start the Application Server")
+	fmt.Println("  tusk dev [worker-file]    Start in development mode (alias for start)")
 	fmt.Println("  tusk setup                Verify and setup environment")
 	fmt.Println("  tusk init                 Initialize a new tusk.json file")
 	fmt.Println("\nPackage Management:")
@@ -91,7 +93,8 @@ func printHelp() {
 	fmt.Println("\nOther Commands:")
 	fmt.Println("  tusk [command]            Run a framework command or script")
 	fmt.Println("\nExamples:")
-	fmt.Println("  tusk start                # Uses worker.php (default)")
+	fmt.Println("  tusk start                # Start the high-performance tusk server")
+	fmt.Println("  tusk dev                  # Same as start - use tusk server, not php -S")
 	fmt.Println("  tusk start custom.php     # Uses custom.php as worker")
 	fmt.Println("  tusk install              # Install dependencies from composer.json")
 	fmt.Println("  tusk add symfony/console  # Add a package")
