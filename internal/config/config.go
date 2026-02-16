@@ -22,11 +22,11 @@ type Config struct {
 	Scripts       map[string]string `json:"scripts"`
 
 	// Package management (from composer.json)
-	Name         string                       `json:"name,omitempty"`
-	Description  string                       `json:"description,omitempty"`
-	Type         string                       `json:"type,omitempty"`
-	Version      string                       `json:"version,omitempty"`
-	Keywords     []string                     `json:"keywords,omitempty"`
+	Name             string                       `json:"name,omitempty"`
+	Description      string                       `json:"description,omitempty"`
+	Type             string                       `json:"type,omitempty"`
+	Version          string                       `json:"version,omitempty"`
+	Keywords         []string                     `json:"keywords,omitempty"`
 	Homepage         string                       `json:"homepage,omitempty"`
 	License          interface{}                  `json:"license,omitempty"` // Can be string or array
 	Authors          []Author                     `json:"authors,omitempty"`
