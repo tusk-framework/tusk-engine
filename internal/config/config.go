@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Config holds the Tusk Engine configuration
@@ -133,7 +134,7 @@ func loadComposerConfig(cfg *Config) {
 						parts = append(parts, str)
 					}
 				}
-				scriptStr = fmt.Sprintf("%v", parts)
+				scriptStr = strings.Join(parts, " && ")
 			default:
 				scriptStr = fmt.Sprintf("%v", script)
 			}

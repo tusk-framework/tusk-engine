@@ -54,19 +54,19 @@ func Run(args []string) {
 	case "setup":
 		runSetup(cfg)
 	case "install":
-		runInstall(cfg, args[2:])
+		runInstall(args[2:])
 	case "add":
 		if len(args) < 3 {
 			log.Fatalf("Usage: tusk add <package>")
 		}
-		runAdd(cfg, args[2:])
+		runAdd(args[2:])
 	case "remove":
 		if len(args) < 3 {
 			log.Fatalf("Usage: tusk remove <package>")
 		}
-		runRemove(cfg, args[2:])
+		runRemove(args[2:])
 	case "update":
-		runUpdate(cfg, args[2:])
+		runUpdate(args[2:])
 	case "init":
 		runInit()
 	case "help":
@@ -209,63 +209,63 @@ func proxyToPHPWithConfig(cfg *config.Config, args []string) {
 
 // runInit creates a new tusk.json file
 func runInit() {
-if _, err := os.Stat("tusk.json"); err == nil {
-fmt.Println("tusk.json already exists")
-return
-}
+	if _, err := os.Stat("tusk.json"); err == nil {
+		fmt.Println("tusk.json already exists")
+		return
+	}
 
-// Check if composer.json exists
-hasComposer := false
-if _, err := os.Stat("composer.json"); err == nil {
-hasComposer = true
-fmt.Println("Found composer.json - will merge configuration")
-}
+	// Check if composer.json exists
+	hasComposer := false
+	if _, err := os.Stat("composer.json"); err == nil {
+		hasComposer = true
+		fmt.Println("Found composer.json - will merge configuration")
+	}
 
-cfg := config.DefaultConfig()
-if hasComposer {
-// Load from composer.json
-config.LoadConfig()
-}
+	cfg := config.DefaultConfig()
+	if hasComposer {
+		// Load from composer.json
+		cfg = config.LoadConfig()
+	}
 
-// Write tusk.json
-data, err := json.MarshalIndent(cfg, "", "    ")
-if err != nil {
-log.Fatalf("Failed to create tusk.json: %v", err)
-}
+	// Write tusk.json
+	data, err := json.MarshalIndent(cfg, "", "    ")
+	if err != nil {
+		log.Fatalf("Failed to create tusk.json: %v", err)
+	}
 
-if err := os.WriteFile("tusk.json", data, 0644); err != nil {
-log.Fatalf("Failed to write tusk.json: %v", err)
-}
+	if err := os.WriteFile("tusk.json", data, 0644); err != nil {
+		log.Fatalf("Failed to write tusk.json: %v", err)
+	}
 
-fmt.Println("Created tusk.json successfully!")
+	fmt.Println("Created tusk.json successfully!")
 }
 
 // runInstall installs PHP dependencies using composer
-func runInstall(cfg *config.Config, args []string) {
-fmt.Println("Installing PHP dependencies...")
+func runInstall(args []string) {
+	fmt.Println("Installing PHP dependencies...")
 
-// Check if composer is installed
-if _, err := exec.LookPath("composer"); err != nil {
-log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
-}
+	// Check if composer is installed
+	if _, err := exec.LookPath("composer"); err != nil {
+		log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
+	}
 
-// Run composer install
-cmdArgs := append([]string{"install"}, args...)
-cmd := exec.Command("composer", cmdArgs...)
-cmd.Stdin = os.Stdin
-cmd.Stdout = os.Stdout
-cmd.Stderr = os.Stderr
+	// Run composer install
+	cmdArgs := append([]string{"install"}, args...)
+	cmd := exec.Command("composer", cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-if err := cmd.Run(); err != nil {
-log.Fatalf("Failed to install dependencies: %v", err)
-}
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("Failed to install dependencies: %v", err)
+	}
 
-fmt.Println("Dependencies installed successfully!")
+	fmt.Println("Dependencies installed successfully!")
 }
 
 // runAdd adds a PHP package
-func runAdd(cfg *config.Config, packages []string) {
-fmt.Printf("Adding package(s): %s\n", strings.Join(packages, ", "))
+func runAdd(packages []string) {
+	fmt.Printf("Adding package(s): %s\n", strings.Join(packages, ", "))
 
 // Check if composer is installed
 if _, err := exec.LookPath("composer"); err != nil {
@@ -283,55 +283,55 @@ if err := cmd.Run(); err != nil {
 log.Fatalf("Failed to add package: %v", err)
 }
 
-fmt.Println("Package(s) added successfully!")
+	fmt.Println("Package(s) added successfully!")
 }
 
 // runRemove removes a PHP package
-func runRemove(cfg *config.Config, packages []string) {
-fmt.Printf("Removing package(s): %s\n", strings.Join(packages, ", "))
+func runRemove(packages []string) {
+	fmt.Printf("Removing package(s): %s\n", strings.Join(packages, ", "))
 
-// Check if composer is installed
-if _, err := exec.LookPath("composer"); err != nil {
-log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
-}
+	// Check if composer is installed
+	if _, err := exec.LookPath("composer"); err != nil {
+		log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
+	}
 
-// Run composer remove
-cmdArgs := append([]string{"remove"}, packages...)
-cmd := exec.Command("composer", cmdArgs...)
-cmd.Stdin = os.Stdin
-cmd.Stdout = os.Stdout
-cmd.Stderr = os.Stderr
+	// Run composer remove
+	cmdArgs := append([]string{"remove"}, packages...)
+	cmd := exec.Command("composer", cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-if err := cmd.Run(); err != nil {
-log.Fatalf("Failed to remove package: %v", err)
-}
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("Failed to remove package: %v", err)
+	}
 
-fmt.Println("Package(s) removed successfully!")
+	fmt.Println("Package(s) removed successfully!")
 }
 
 // runUpdate updates PHP dependencies
-func runUpdate(cfg *config.Config, packages []string) {
-if len(packages) == 0 {
-fmt.Println("Updating all PHP dependencies...")
-} else {
-fmt.Printf("Updating package(s): %s\n", strings.Join(packages, ", "))
-}
+func runUpdate(packages []string) {
+	if len(packages) == 0 {
+		fmt.Println("Updating all PHP dependencies...")
+	} else {
+		fmt.Printf("Updating package(s): %s\n", strings.Join(packages, ", "))
+	}
 
-// Check if composer is installed
-if _, err := exec.LookPath("composer"); err != nil {
-log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
-}
+	// Check if composer is installed
+	if _, err := exec.LookPath("composer"); err != nil {
+		log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
+	}
 
-// Run composer update
-cmdArgs := append([]string{"update"}, packages...)
-cmd := exec.Command("composer", cmdArgs...)
-cmd.Stdin = os.Stdin
-cmd.Stdout = os.Stdout
-cmd.Stderr = os.Stderr
+	// Run composer update
+	cmdArgs := append([]string{"update"}, packages...)
+	cmd := exec.Command("composer", cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-if err := cmd.Run(); err != nil {
-log.Fatalf("Failed to update dependencies: %v", err)
-}
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("Failed to update dependencies: %v", err)
+	}
 
-fmt.Println("Dependencies updated successfully!")
+	fmt.Println("Dependencies updated successfully!")
 }
