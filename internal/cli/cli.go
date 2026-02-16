@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -35,7 +36,8 @@ func Run(args []string) {
 	switch command {
 	case "start":
 		// Check if a custom worker file is specified
-		if len(args) > 2 {
+		// args[0] = binary name, args[1] = "start", args[2] = optional worker file
+		if len(args) >= 3 {
 			workerFile := args[2]
 			// Validate the worker file exists
 			if _, err := os.Stat(workerFile); os.IsNotExist(err) {
@@ -90,7 +92,16 @@ func runSetup(cfg *config.Config) {
 }
 
 func runServerWithConfig(cfg *config.Config) {
-	log.Printf("Starting server with worker: %s", cfg.WorkerCommand)
+	// Resolve the worker path for logging
+	workerPath := cfg.WorkerCommand
+	if !filepath.IsAbs(workerPath) {
+		workerPath = filepath.Join(cfg.ProjectRoot, workerPath)
+	}
+	// Get absolute path for clearer logging
+	if absPath, err := filepath.Abs(workerPath); err == nil {
+		workerPath = absPath
+	}
+	log.Printf("Starting server with worker: %s", workerPath)
 	
 	// 2. Initialize Worker Pool
 	pool, err := worker.NewPool(cfg)
