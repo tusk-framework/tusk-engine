@@ -50,14 +50,24 @@ Create a `tusk.json` in your project root:
 {
     "port": 8080,
     "worker_count": 4,
-    "php_binary": "php"
+    "php_binary": "php",
+    "worker_command": "worker.php"
 }
 ```
 
 ### 3. Run
 ```bash
-./tusk.exe start
+# Use default worker.php
+./tusk start
+
+# Or specify a custom worker file
+./tusk start custom-worker.php
 ```
+
+> [!TIP]
+> You can customize the worker file in two ways:
+> 1. **Command-line**: `tusk start my-worker.php` (takes precedence)
+> 2. **Config file**: Set `"worker_command": "my-worker.php"` in `tusk.json`
 
 ## Protocol (NDJSON)
 The engine communicates with PHP workers using Newline Delimited JSON.

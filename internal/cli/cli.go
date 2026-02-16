@@ -34,6 +34,10 @@ func Run(args []string) {
 
 	switch command {
 	case "start":
+		// Check if a custom worker file is specified
+		if len(args) > 2 {
+			cfg.WorkerCommand = args[2]
+		}
 		runServerWithConfig(cfg)
 	case "setup":
 		runSetup(cfg)
@@ -48,11 +52,12 @@ func Run(args []string) {
 func printHelp() {
 	fmt.Println("Tusk Native Engine (v0.1)")
 	fmt.Println("\nUsage:")
-	fmt.Println("  tusk start       Start the Application Server")
-	fmt.Println("  tusk setup       Verify and setup environment")
-	fmt.Println("  tusk [command]   Run a framework command or script")
+	fmt.Println("  tusk start [worker-file]  Start the Application Server")
+	fmt.Println("  tusk setup                Verify and setup environment")
+	fmt.Println("  tusk [command]            Run a framework command or script")
 	fmt.Println("\nExamples:")
-	fmt.Println("  tusk start")
+	fmt.Println("  tusk start                # Uses worker.php (default)")
+	fmt.Println("  tusk start custom.php     # Uses custom.php as worker")
 	fmt.Println("  tusk migrate")
 }
 
@@ -76,6 +81,8 @@ func runSetup(cfg *config.Config) {
 }
 
 func runServerWithConfig(cfg *config.Config) {
+	log.Printf("Starting server with worker: %s", cfg.WorkerCommand)
+	
 	// 2. Initialize Worker Pool
 	pool, err := worker.NewPool(cfg)
 	if err != nil {
