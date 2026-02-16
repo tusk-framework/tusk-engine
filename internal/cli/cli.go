@@ -67,6 +67,18 @@ func Run(args []string) {
 		runUpdate(args[2:])
 	case "init":
 		runInit()
+	case "run":
+		// Explicit command to run scripts from tusk.json or composer.json
+		// Usage: tusk run <script-name>
+		if len(args) < 3 {
+			log.Fatalf("Usage: tusk run <script-name>")
+		}
+		scriptName := args[2]
+		if script, ok := cfg.Scripts[scriptName]; ok {
+			runScript(script, args[3:])
+		} else {
+			log.Fatalf("Script '%s' not found in tusk.json or composer.json", scriptName)
+		}
 	case "help":
 		printHelp()
 	default:
@@ -92,15 +104,19 @@ func printHelp() {
 	fmt.Println("  tusk add <package>        Add a PHP package")
 	fmt.Println("  tusk remove <package>     Remove a PHP package")
 	fmt.Println("  tusk update [package]     Update dependencies")
+	fmt.Println("\nScript Runner:")
+	fmt.Println("  tusk run <script>         Run a script from tusk.json or composer.json")
+	fmt.Println("  tusk <script>             Run a script directly (shorthand)")
 	fmt.Println("\nOther Commands:")
-	fmt.Println("  tusk [command]            Run a framework command or script")
+	fmt.Println("  tusk [command]            Run a framework command")
 	fmt.Println("\nExamples:")
 	fmt.Println("  tusk start                # Start the high-performance tusk server")
 	fmt.Println("  tusk dev                  # Same as start - use tusk server, not php -S")
 	fmt.Println("  tusk start custom.php     # Uses custom.php as worker")
 	fmt.Println("  tusk install              # Install dependencies from composer.json")
 	fmt.Println("  tusk add symfony/console  # Add a package")
-	fmt.Println("  tusk test                 # Run script from tusk.json or composer.json")
+	fmt.Println("  tusk run test             # Run test script (explicit)")
+	fmt.Println("  tusk test                 # Run test script (shorthand)")
 }
 
 func runSetup(cfg *config.Config) {

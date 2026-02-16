@@ -107,11 +107,21 @@ tusk update
 ### 4. Run Scripts
 ```bash
 # Run any script defined in tusk.json or composer.json
+
+# Explicit way (recommended for clarity)
+tusk run dev
+tusk run test
+
+# Shorthand (backward compatible)
 tusk dev
 tusk test
 
 # Scripts from both config files work seamlessly
 ```
+
+> [!TIP]
+> Use `tusk run <script>` for explicit script execution, or just `tusk <script>` as shorthand.
+> Both work the same way, but `tusk run` makes it clear you're running a script.
 
 ### 5. Start the Server
 ```bash
@@ -161,6 +171,7 @@ Tusk is designed to be like **Bun for PHP** - a comprehensive tool that manages 
 - Falls back to `composer.json` (standard PHP)
 - Merges scripts from both if both exist
 - Priority: `tusk.json` > `composer.json`
+- Supports full composer.json schema (keywords, authors, license, etc.)
 
 ### 📦 Built-in Dependency Management
 No need to switch between `tusk` and `composer` commands:
@@ -177,17 +188,32 @@ tusk update vendor/package # Update specific package
 Run any script from `tusk.json` or `composer.json`:
 
 ```bash
-tusk dev    # Run your dev script
+# Explicit (recommended)
+tusk run dev    # Run your dev script
+tusk run test   # Run your test script
+tusk run build  # Run your build script
+
+# Shorthand (backward compatible)
+tusk dev    # Same as 'tusk run dev'
 tusk test   # Run your test script
 tusk build  # Run your build script
 ```
 
 ### 🎯 Unified Interface
 Everything through one command:
-- Server management: `tusk start`
+- Server management: `tusk start`, `tusk dev`
 - Package management: `tusk install`, `tusk add`, `tusk update`
-- Script execution: `tusk <script-name>`
+- Script execution: `tusk run <script>` or `tusk <script>`
 - Framework commands: `tusk make:controller` (proxied to PHP)
+
+### 📋 Composer Schema Support
+Tusk now supports the complete composer.json schema including:
+- Package metadata: name, description, version, type, keywords
+- Licensing: license, authors, homepage
+- Dependencies: require, require-dev, conflict, replace, provide, suggest
+- Autoloading: autoload, autoload-dev (PSR-4, PSR-0, classmap, files)
+- Configuration: config, extra, bin, repositories
+- Scripts: Including array-style scripts with proper execution
 
 ## Protocol (NDJSON)
 The engine communicates with PHP workers using Newline Delimited JSON.
