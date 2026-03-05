@@ -1,8 +1,8 @@
 package server
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -17,6 +17,7 @@ import (
 type Server struct {
 	cfg  *config.Config
 	pool *worker.Pool
+	http *http.Server
 }
 
 // NewServer creates a new HTTP server
@@ -35,36 +36,45 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/", s.handleRequest)
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.Address, s.cfg.Port)
-	fmt.Printf("Tusk Engine listening on %s\n", addr)
+	s.http = &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
 
-	return http.ListenAndServe(addr, mux)
+	fmt.Printf("Tusk Engine listening on %s\n", addr)
+	return s.http.ListenAndServe()
+}
+
+// Stop stops the HTTP server gracefully
+func (s *Server) Stop(ctx context.Context) error {
+	if s.http == nil {
+		return nil
+	}
+	return s.http.Shutdown(ctx)
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	// 1. Read Body
-	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body.Close()
-
-	// 2. Extract Headers
+	// 1. Extract Headers
 	headers := make(map[string][]string)
 	for k, v := range r.Header {
 		headers[k] = v
 	}
 
-	// 3. Construct internal request
+	// 2. Construct internal request metadata
 	req := map[string]interface{}{
 		"method":  r.Method,
 		"url":     r.RequestURI,
 		"headers": headers,
-		"body":    string(bodyBytes),
 	}
 
-	// 4. Forward to worker
+	// 3. Forward to worker
 	start := time.Now()
 	metrics.WorkersActive.Inc()
 	defer metrics.WorkersActive.Dec()
 
-	resp, err := s.pool.HandleRequest(req)
+	// r.Body implements io.ReadCloser which matches io.Reader
+	resp, err := s.pool.HandleRequest(req, r.Body)
+	defer r.Body.Close()
 
 	duration := time.Since(start).Seconds()
 	metrics.RequestDuration.WithLabelValues(r.Method).Observe(duration)

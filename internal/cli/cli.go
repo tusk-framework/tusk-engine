@@ -1,14 +1,19 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/tusk-framework/tusk-engine/internal/config"
 	"github.com/tusk-framework/tusk-engine/internal/php"
@@ -163,9 +168,29 @@ func runServerWithConfig(cfg *config.Config) {
 
 	// 3. Start HTTP Server
 	srv := server.NewServer(cfg, pool)
-	if err := srv.Start(); err != nil {
-		log.Fatalf("Server failed: %v", err)
+
+	// Interrupt handler
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	<-stop
+	log.Println("Shutting down gracefully...")
+
+	// Create a context with timeout for shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Stop(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
 	}
+
+	log.Println("Server stopped.")
 }
 
 func runScript(script string, extraArgs []string) {
@@ -288,21 +313,21 @@ func runInstall(args []string) {
 func runAdd(packages []string) {
 	fmt.Printf("Adding package(s): %s\n", strings.Join(packages, ", "))
 
-// Check if composer is installed
-if _, err := exec.LookPath("composer"); err != nil {
-log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
-}
+	// Check if composer is installed
+	if _, err := exec.LookPath("composer"); err != nil {
+		log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
+	}
 
-// Run composer require
-cmdArgs := append([]string{"require"}, packages...)
-cmd := exec.Command("composer", cmdArgs...)
-cmd.Stdin = os.Stdin
-cmd.Stdout = os.Stdout
-cmd.Stderr = os.Stderr
+	// Run composer require
+	cmdArgs := append([]string{"require"}, packages...)
+	cmd := exec.Command("composer", cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-if err := cmd.Run(); err != nil {
-log.Fatalf("Failed to add package: %v", err)
-}
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("Failed to add package: %v", err)
+	}
 
 	fmt.Println("Package(s) added successfully!")
 }

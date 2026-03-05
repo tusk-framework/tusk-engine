@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,7 @@ type Pool struct {
 	mu          sync.Mutex
 	ctx         context.Context
 	cancel      context.CancelFunc
+	wg          sync.WaitGroup
 }
 
 // NewPool creates a new worker pool
@@ -165,7 +167,15 @@ func (p *Pool) watchWorker(worker *Process) {
 }
 
 // HandleRequest dispatches a request to an available worker
-func (p *Pool) HandleRequest(req map[string]interface{}) (map[string]interface{}, error) {
+func (p *Pool) HandleRequest(req map[string]interface{}, body io.Reader) (map[string]interface{}, error) {
+	// 1. Prepare body (if exists)
+	if body != nil {
+		buf := new(bytes.Buffer)
+		if _, err := io.Copy(buf, body); err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+		req["body"] = buf.String()
+	}
 	// Pick an available worker from the queue (blocks if all busy)
 	var w *Process
 	select {
@@ -174,6 +184,9 @@ func (p *Pool) HandleRequest(req map[string]interface{}) (map[string]interface{}
 	case <-p.ctx.Done():
 		return nil, fmt.Errorf("pool shutting down")
 	}
+
+	p.wg.Add(1)
+	defer p.wg.Done()
 
 	// Always put the worker back (or handle its death)
 	defer func() {
@@ -200,6 +213,22 @@ func (p *Pool) HandleRequest(req map[string]interface{}) (map[string]interface{}
 // Stop terminates all workers
 func (p *Pool) Stop() {
 	p.cancel()
+
+	// Wait for active requests to finish
+	// We give them a few seconds then kill
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("All active requests finished.")
+	case <-time.After(5 * time.Second):
+		log.Println("Timeout waiting for requests, killing workers...")
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
