@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tusk-framework/tusk-engine/internal/config"
+	"github.com/tusk-framework/tusk-engine/internal/metrics"
 	"github.com/tusk-framework/tusk-engine/internal/php"
 )
 
@@ -29,12 +30,13 @@ type Process struct {
 
 // Pool manages a set of PHP worker processes
 type Pool struct {
-	cfg     *config.Config
-	phpMgr  *php.Manager
-	workers []*Process
-	mu      sync.Mutex
-	ctx     context.Context
-	cancel  context.CancelFunc
+	cfg         *config.Config
+	phpMgr      *php.Manager
+	workers     []*Process
+	workerQueue chan *Process
+	mu          sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // NewPool creates a new worker pool
@@ -47,10 +49,11 @@ func NewPool(cfg *config.Config) (*Pool, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Pool{
-		cfg:    cfg,
-		phpMgr: mgr,
-		ctx:    ctx,
-		cancel: cancel,
+		cfg:         cfg,
+		phpMgr:      mgr,
+		workerQueue: make(chan *Process, cfg.WorkerCount),
+		ctx:         ctx,
+		cancel:      cancel,
 	}, nil
 }
 
@@ -60,6 +63,8 @@ func (p *Pool) Start() error {
 	defer p.mu.Unlock()
 
 	log.Printf("Starting %d PHP workers...", p.cfg.WorkerCount)
+
+	metrics.WorkersTotal.Set(float64(p.cfg.WorkerCount))
 
 	for i := 0; i < p.cfg.WorkerCount; i++ {
 		if err := p.spawnWorker(i); err != nil {
@@ -120,6 +125,9 @@ func (p *Pool) spawnWorker(id int) error {
 	}
 	p.workers = append(p.workers, worker)
 
+	// Add to available queue
+	p.workerQueue <- worker
+
 	// Watch the process in a goroutine
 	go p.watchWorker(worker)
 
@@ -145,30 +153,45 @@ func (p *Pool) watchWorker(worker *Process) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Remove old worker from p.workers list
+	for i, w := range p.workers {
+		if w == worker {
+			p.workers = append(p.workers[:i], p.workers[i+1:]...)
+			break
+		}
+	}
+
 	p.spawnWorker(worker.ID)
 }
 
 // HandleRequest dispatches a request to an available worker
 func (p *Pool) HandleRequest(req map[string]interface{}) (map[string]interface{}, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if len(p.workers) == 0 {
-		return nil, fmt.Errorf("no workers available")
+	// Pick an available worker from the queue (blocks if all busy)
+	var w *Process
+	select {
+	case w = <-p.workerQueue:
+		// Got a worker
+	case <-p.ctx.Done():
+		return nil, fmt.Errorf("pool shutting down")
 	}
 
-	// Pickup first worker (Round-robin logic can be added later)
-	w := p.workers[0]
+	// Always put the worker back (or handle its death)
+	defer func() {
+		// Only put back if the command is still running
+		if w.cmd.ProcessState == nil || !w.cmd.ProcessState.Exited() {
+			p.workerQueue <- w
+		}
+	}()
 
 	// Send
 	if err := w.Enc.Encode(req); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("worker %d encode error: %w", w.ID, err)
 	}
 
 	// Receive
 	var resp map[string]interface{}
 	if err := w.Dec.Decode(&resp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("worker %d decode error: %w", w.ID, err)
 	}
 
 	return resp, nil
