@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -167,15 +166,7 @@ func (p *Pool) watchWorker(worker *Process) {
 }
 
 // HandleRequest dispatches a request to an available worker
-func (p *Pool) HandleRequest(req map[string]interface{}, body io.Reader) (map[string]interface{}, error) {
-	// 1. Prepare body (if exists)
-	if body != nil {
-		buf := new(bytes.Buffer)
-		if _, err := io.Copy(buf, body); err != nil {
-			return nil, fmt.Errorf("failed to read request body: %w", err)
-		}
-		req["body"] = buf.String()
-	}
+func (p *Pool) HandleRequest(req map[string]interface{}) (map[string]interface{}, error) {
 	// Pick an available worker from the queue (blocks if all busy)
 	var w *Process
 	select {
@@ -196,18 +187,46 @@ func (p *Pool) HandleRequest(req map[string]interface{}, body io.Reader) (map[st
 		}
 	}()
 
-	// Send
-	if err := w.Enc.Encode(req); err != nil {
-		return nil, fmt.Errorf("worker %d encode error: %w", w.ID, err)
+	errCh := make(chan error, 1)
+	respCh := make(chan map[string]interface{}, 1)
+
+	go func() {
+		// Send
+		if err := w.Enc.Encode(req); err != nil {
+			errCh <- fmt.Errorf("worker %d encode error: %w", w.ID, err)
+			return
+		}
+
+		// Receive
+		var resp map[string]interface{}
+		if err := w.Dec.Decode(&resp); err != nil {
+			errCh <- fmt.Errorf("worker %d decode error: %w", w.ID, err)
+			return
+		}
+		respCh <- resp
+	}()
+
+	timeoutDuration := time.Duration(p.cfg.Timeout) * time.Second
+	if timeoutDuration == 0 {
+		timeoutDuration = 30 * time.Second
 	}
 
-	// Receive
-	var resp map[string]interface{}
-	if err := w.Dec.Decode(&resp); err != nil {
-		return nil, fmt.Errorf("worker %d decode error: %w", w.ID, err)
+	select {
+	case resp := <-respCh:
+		return resp, nil
+	case err := <-errCh:
+		// If error occurred in encode/decode, the stream might be corrupted.
+		// Kill the worker so it gets restarted.
+		if w.cmd.Process != nil {
+			w.cmd.Process.Kill()
+		}
+		return nil, err
+	case <-time.After(timeoutDuration):
+		if w.cmd.Process != nil {
+			w.cmd.Process.Kill()
+		}
+		return nil, fmt.Errorf("worker %d timed out after %s", w.ID, timeoutDuration)
 	}
-
-	return resp, nil
 }
 
 // Stop terminates all workers

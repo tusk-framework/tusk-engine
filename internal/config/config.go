@@ -19,6 +19,8 @@ type Config struct {
 	PhpBinary     string            `json:"php_binary"`
 	PhpIni        string            `json:"php_ini"`
 	ProjectRoot   string            `json:"project_root"`
+	PublicDir     string            `json:"public_dir"`
+	Timeout       int               `json:"timeout"`
 	Scripts       map[string]string `json:"scripts"`
 
 	// Package management (from composer.json)
@@ -91,6 +93,8 @@ func DefaultConfig() *Config {
 		PhpBinary:     "php",
 		PhpIni:        "", // Empty means use system default
 		ProjectRoot:   "./",
+		PublicDir:     "public",
+		Timeout:       30,
 		Scripts:       make(map[string]string),
 	}
 }

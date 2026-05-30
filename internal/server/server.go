@@ -3,8 +3,12 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -54,26 +58,122 @@ func (s *Server) Stop(ctx context.Context) error {
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	// 1. Extract Headers
+	// 1. Static file check
+	publicPath := filepath.Join(s.cfg.ProjectRoot, s.cfg.PublicDir, r.URL.Path)
+	if stat, err := os.Stat(publicPath); err == nil && !stat.IsDir() && r.URL.Path != "/" {
+		http.ServeFile(w, r, publicPath)
+		return
+	}
+
+	// 2. Extract Headers and Query
 	headers := make(map[string][]string)
 	for k, v := range r.Header {
 		headers[k] = v
 	}
 
-	// 2. Construct internal request metadata
-	req := map[string]interface{}{
-		"method":  r.Method,
-		"url":     r.RequestURI,
-		"headers": headers,
+	query := make(map[string]string)
+	for k, v := range r.URL.Query() {
+		if len(v) > 0 {
+			query[k] = v[0]
+		}
 	}
 
-	// 3. Forward to worker
+	// 3. Handle multipart/form-data and body
+	var parsedBody map[string]string
+	var uploadedFiles map[string]interface{}
+	var rawBody string
+	var tempFiles []string
+
+	defer func() {
+		for _, tf := range tempFiles {
+			os.Remove(tf)
+		}
+	}()
+
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		// Parse multipart form
+		if err := r.ParseMultipartForm(10 << 20); err == nil {
+			parsedBody = make(map[string]string)
+			for k, v := range r.MultipartForm.Value {
+				if len(v) > 0 {
+					parsedBody[k] = v[0]
+				}
+			}
+
+			uploadedFiles = make(map[string]interface{})
+			for k, files := range r.MultipartForm.File {
+				var fileInfoList []map[string]interface{}
+				for _, fileHeader := range files {
+					file, err := fileHeader.Open()
+					if err != nil {
+						continue
+					}
+
+					// Save to temp file
+					tempFile, err := os.CreateTemp("", "tusk-upload-*")
+					if err != nil {
+						file.Close()
+						continue
+					}
+					io.Copy(tempFile, file)
+					tempFile.Close()
+					file.Close()
+
+					tempFiles = append(tempFiles, tempFile.Name())
+
+					fileInfoList = append(fileInfoList, map[string]interface{}{
+						"name":     fileHeader.Filename,
+						"type":     fileHeader.Header.Get("Content-Type"),
+						"tmp_name": tempFile.Name(),
+						"error":    0,
+						"size":     fileHeader.Size,
+					})
+				}
+				if len(fileInfoList) > 0 {
+					uploadedFiles[k] = fileInfoList
+				}
+			}
+		}
+	} else if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
+		if err := r.ParseForm(); err == nil {
+			parsedBody = make(map[string]string)
+			for k, v := range r.PostForm {
+				if len(v) > 0 {
+					parsedBody[k] = v[0]
+				}
+			}
+		}
+	} else {
+		// Read raw body
+		bodyBytes, _ := io.ReadAll(r.Body)
+		rawBody = string(bodyBytes)
+	}
+
+	// 4. Extract Cookies
+	cookies := make(map[string]string)
+	for _, cookie := range r.Cookies() {
+		cookies[cookie.Name] = cookie.Value
+	}
+
+	// 5. Construct internal request metadata
+	req := map[string]interface{}{
+		"method":        r.Method,
+		"url":           r.RequestURI,
+		"query":         query,
+		"headers":       headers,
+		"cookies":       cookies,
+		"body":          rawBody,
+		"parsedBody":    parsedBody,
+		"uploadedFiles": uploadedFiles,
+	}
+
+	// 6. Forward to worker
 	start := time.Now()
 	metrics.WorkersActive.Inc()
 	defer metrics.WorkersActive.Dec()
 
-	// r.Body implements io.ReadCloser which matches io.Reader
-	resp, err := s.pool.HandleRequest(req, r.Body)
+	resp, err := s.pool.HandleRequest(req)
 	defer r.Body.Close()
 
 	duration := time.Since(start).Seconds()
