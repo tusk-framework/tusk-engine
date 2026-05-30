@@ -1,4 +1,4 @@
-# Tusk Native Engine (v0.1)
+# Tusk Native Engine
 
 The **Tusk Native Engine** is the high-performance, all-in-one application server for the Tusk Framework. It replaces `php-fpm` and `nginx` with a single, self-contained binary written in Go.
 
