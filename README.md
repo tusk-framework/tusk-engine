@@ -29,18 +29,36 @@ graph TD
 
 ## Installation
 
+Download the latest binary for your platform from the [GitHub Releases](https://github.com/tusk-framework/tusk-engine/releases) page.
+
 ### Windows (PowerShell)
 ```powershell
-iwr -useb https://tusk.sh/install.ps1 | iex
+# Download the latest release
+$url = "https://github.com/tusk-framework/tusk-engine/releases/latest/download/tusk_Windows_x86_64.zip"
+Invoke-WebRequest -Uri $url -OutFile tusk.zip
+Expand-Archive tusk.zip -DestinationPath "$env:USERPROFILE\.tusk"
+
+# Add to PATH (run once)
+$env:PATH += ";$env:USERPROFILE\.tusk"
+[Environment]::SetEnvironmentVariable("PATH", $env:PATH, "User")
 ```
 
 ### Ubuntu / macOS (Bash)
 ```bash
-curl -fsSL https://tusk.sh/install.sh | bash
+# Download the latest release
+# Linux amd64:
+curl -L https://github.com/tusk-framework/tusk-engine/releases/latest/download/tusk_Linux_x86_64.tar.gz | tar xz
+# macOS Apple Silicon:
+# curl -L https://github.com/tusk-framework/tusk-engine/releases/latest/download/tusk_Darwin_arm64.tar.gz | tar xz
+
+mkdir -p ~/.tusk && mv tusk ~/.tusk/tusk
+
+# Add to PATH (add to ~/.bashrc or ~/.zshrc)
+export PATH="$HOME/.tusk:$PATH"
 ```
 
 > [!NOTE]
-> The installers above will download the Tusk binary and a portable PHP runtime into `~/.tusk` (or `%USERPROFILE%\.tusk`) and add them to your PATH.
+> After installation, restart your terminal (or run `source ~/.bashrc`) to ensure `tusk` is available on your PATH.
 
 ## Manual Build
 ```bash
