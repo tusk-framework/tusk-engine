@@ -65,6 +65,8 @@ Create or edit `tusk.json` in your project root:
     "worker_count": 4,
     "php_binary": "php",
     "worker_command": "worker.php",
+    "public_dir": "public",
+    "timeout": 30,
     "scripts": {
         "dev": "tusk start",
         "test": "phpunit"
@@ -216,6 +218,6 @@ Tusk now supports the complete composer.json schema including:
 - Scripts: Including array-style scripts with proper execution
 
 ## Protocol (NDJSON)
-The engine communicates with PHP workers using Newline Delimited JSON.
-- **Request**: `{ "method": "GET", "url": "/", "headers": {...}, "body": "..." }`
+The engine communicates with PHP workers using Newline Delimited JSON. The engine acts as a reverse proxy, parsing static files, query strings, and multipart uploads securely.
+- **Request**: `{ "method": "GET", "url": "/", "query": {...}, "headers": {...}, "cookies": {...}, "body": "...", "parsedBody": {...}, "uploadedFiles": {...} }`
 - **Response**: `{ "status": 200, "headers": {...}, "body": "..." }`

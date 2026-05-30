@@ -8,16 +8,18 @@ The **Tusk Native Engine** is the application server backbone of the Tusk Framew
 ### 1. Process Supervision (Go)
 - **Pool Manager**: Spawns a configured number of `worker.php` processes.
 - **Self-Healing**: Automatically restarts PHP workers if they crash.
+- **Timeouts**: Kills and replaces workers that hang longer than the configured timeout limit.
 - **Graceful Shutdown**: Handles SIGTERM/SIGINT to clean up workers.
 
 ### 2. Networking (Go)
 - **HTTP/1.1**: Uses Go's native `net/http` server.
+- **Static Serving**: Automatically serves static files from the `public_dir` before hitting PHP.
 - **Dynamic Config**: Loads `tusk.json` to configure listener address and ports.
 
 ### 3. Inter-Process Communication (IPC)
 - **Standard I/O Pipes**: uses `stdin` and `stdout` to communicate with workers.
 - **Protocol**: NDJSON (Newline Delimited JSON).
-    - **Request**: JSON payload containing Method, URL, Headers, and Body.
+    - **Request**: JSON payload containing Method, URL, Headers, Query, Cookies, Raw Body, Parsed Body (POST), and Uploaded Files metadata.
     - **Response**: JSON payload containing Status, Headers, and Body.
 
 ### 4. Zero-Dependency CLI
