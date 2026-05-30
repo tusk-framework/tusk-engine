@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -35,7 +36,11 @@ func TestPoolConcurrency(t *testing.T) {
 	results := make(chan error, 3)
 
 	sendReq := func(sleepMs int) {
-		_, err := pool.HandleRequest(map[string]interface{}{"sleep": sleepMs})
+		_, err := pool.HandleRequest(map[string]interface{}{
+			"query": map[string]string{
+				"sleep": strconv.Itoa(sleepMs),
+			},
+		})
 		results <- err
 	}
 

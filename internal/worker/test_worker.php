@@ -32,7 +32,7 @@ while (true) {
 
     $response = [
         'status' => 200,
-        'headers' => ['Content-Type' => ['text/plain']],
+        'headers' => array_merge($req['headers'] ?? [], ['Content-Type' => ['text/plain']]),
         'body' => $body
     ];
 
