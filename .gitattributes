@@ -1,0 +1,11 @@
+# Exclude non-framework files from composer installations
+/.github export-ignore
+/.git export-ignore
+/.gitignore export-ignore
+/tusk-docs export-ignore
+/build export-ignore
+/tests export-ignore
+/phpunit.xml export-ignore
+/README.md export-ignore
+/CONTRIBUTING.md export-ignore
+/LICENSE export-ignore
