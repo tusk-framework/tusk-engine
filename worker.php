@@ -1,8 +1,37 @@
 <?php
 
 // Tusk Native Engine - Worker Script
-// This script runs in a loop, reading requests from STDIN and writing responses to STDOUT.
-// Protocol: NDJSON (Newline Delimited JSON)
+// This script runs the Tusk Framework if available, or falls back to an NDJSON echo server.
+
+$autoloadPaths = [
+    __DIR__ . '/vendor/autoload.php',
+    __DIR__ . '/../vendor/autoload.php', // Depending on folder structure
+];
+
+$autoloadFile = null;
+foreach ($autoloadPaths as $path) {
+    if (file_exists($path)) {
+        $autoloadFile = $path;
+        break;
+    }
+}
+
+if ($autoloadFile) {
+    require_once $autoloadFile;
+
+    if (class_exists(\Tusk\Runtime\Kernel::class) && class_exists(\Tusk\Runtime\Adapters\NativeLoopAdapter::class)) {
+        // Tusk framework is available, boot it!
+        $container = new \Tusk\Core\Container\Container();
+        $kernel = new \Tusk\Runtime\Kernel($container, new \Tusk\Runtime\Adapters\NativeLoopAdapter());
+        
+        $kernel->start();
+        exit(0);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Fallback logic if framework is not installed
+// -----------------------------------------------------------------------------
 
 // Unbuffer stdout to ensure Go receives data immediately
 stream_set_write_buffer(STDOUT, 0);
@@ -20,9 +49,6 @@ while (true) {
         continue;
     }
 
-    // 3. Process Request (Placeholder for framework boot)
-    // In a real app, this would be: $response = $kernel->handle($request);
-
     $method = $req['method'] ?? 'GET';
     $url = $req['url'] ?? '/';
     $headers = $req['headers'] ?? [];
@@ -30,7 +56,7 @@ while (true) {
 
     // Simple Echo Logic for testing
     $responseBody = json_encode([
-        'message' => 'Hello from Tusk Native Engine!',
+        'message' => 'Hello from Tusk Native Engine! (Fallback mode, framework not found)',
         'received' => [
             'method' => $method,
             'url' => $url,
@@ -43,8 +69,8 @@ while (true) {
     $response = [
         'status' => 200,
         'headers' => [
-            'Content-Type' => 'application/json',
-            'X-Tusk-Worker' => getmypid(),
+            'Content-Type' => ['application/json'],
+            'X-Tusk-Worker' => [(string) getmypid()],
         ],
         'body' => $responseBody,
     ];
