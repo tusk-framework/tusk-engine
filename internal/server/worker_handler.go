@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -28,5 +29,20 @@ func safePublicPath(projectRoot, publicDir, requestPath string) (string, bool) {
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", false
 	}
+
+	// Lexical confinement is not enough when public/ contains a symlink.
+	// Resolve existing paths before handing them to http.ServeFile.
+	if _, err := os.Lstat(candidate); err == nil {
+		resolvedRoot, rootErr := filepath.EvalSymlinks(root)
+		resolvedCandidate, candidateErr := filepath.EvalSymlinks(candidate)
+		if rootErr != nil || candidateErr != nil {
+			return "", false
+		}
+		resolvedRelative, relativeErr := filepath.Rel(resolvedRoot, resolvedCandidate)
+		if relativeErr != nil || resolvedRelative == ".." || strings.HasPrefix(resolvedRelative, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+	}
+
 	return candidate, true
 }

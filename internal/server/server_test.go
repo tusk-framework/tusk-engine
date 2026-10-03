@@ -57,6 +57,38 @@ func TestHandleRequestRejectsStaticPathTraversal(t *testing.T) {
 	}
 }
 
+func TestHandleRequestRejectsStaticSymlinkOutsidePublic(t *testing.T) {
+	root := t.TempDir()
+	publicDir := filepath.Join(root, "public")
+	if err := os.Mkdir(publicDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	secretPath := filepath.Join(root, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secretPath, filepath.Join(publicDir, "link.txt")); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.ProjectRoot = root
+	cfg.PublicDir = "public"
+	worker := &fakeWorker{}
+	srv := NewServer(cfg, worker)
+	req := httptest.NewRequest("GET", "/link.txt", nil)
+	recorder := httptest.NewRecorder()
+
+	srv.handleRequest(recorder, req)
+
+	if recorder.Code != 404 {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+	if worker.calls != 0 {
+		t.Fatalf("worker calls = %d, want 0", worker.calls)
+	}
+}
+
 func TestHandleRequestRejectsBodyAboveLimit(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ProjectRoot = t.TempDir()
