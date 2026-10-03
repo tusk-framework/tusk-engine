@@ -109,12 +109,15 @@ tusk doctor
 tusk doctor --json
 tusk toolchain list
 tusk toolchain pin php@8.3
+tusk setup --toolchain --offline
 ```
 
 When `.tusk/toolchain.json` declares a relative executable path, the project
 binary takes precedence over `PATH`. The current slice records requirements
-and diagnoses the environment; provisioning will be added as an explicit,
-verified operation and will never silently replace executables.
+and diagnoses the environment. The provisioning core supports verified cache
+and offline installation, while the official signed catalog is released with
+the Engine; no local unsigned catalog is accepted and no executable is
+silently replaced.
 
 **Or use composer.json** - tusk automatically reads scripts and configuration:
 ```json
