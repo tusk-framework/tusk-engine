@@ -17,7 +17,9 @@ import (
 	"github.com/tusk-framework/tusk-engine/internal/php"
 )
 
-// Process represents a single PHP worker process
+type commandFactory func(string, ...string) *exec.Cmd
+
+// Process represents a single PHP worker process.
 type Process struct {
 	cmd       *exec.Cmd
 	ID        int
@@ -26,9 +28,26 @@ type Process struct {
 	Stdout    io.ReadCloser
 	Enc       *json.Encoder
 	Dec       *json.Decoder
+
+	mu    sync.Mutex
+	alive bool
 }
 
-// Pool manages a set of PHP worker processes
+func (p *Process) isAlive() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.alive
+}
+
+func (p *Process) markDead() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	wasAlive := p.alive
+	p.alive = false
+	return wasAlive
+}
+
+// Pool manages a set of PHP worker processes.
 type Pool struct {
 	cfg         *config.Config
 	phpMgr      *php.Manager
@@ -38,11 +57,18 @@ type Pool struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
+	newCommand  commandFactory
 }
 
-// NewPool creates a new worker pool
+// NewPool creates a new worker pool.
 func NewPool(cfg *config.Config) (*Pool, error) {
-	// Initialize PHP Manager
+	return newPoolWithCommandFactory(cfg, exec.Command)
+}
+
+func newPoolWithCommandFactory(cfg *config.Config, factory commandFactory) (*Pool, error) {
+	if cfg.WorkerCount <= 0 {
+		return nil, fmt.Errorf("worker_count must be positive")
+	}
 	mgr, err := php.NewManager(cfg.PhpBinary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize PHP manager: %w", err)
@@ -55,50 +81,41 @@ func NewPool(cfg *config.Config) (*Pool, error) {
 		workerQueue: make(chan *Process, cfg.WorkerCount),
 		ctx:         ctx,
 		cancel:      cancel,
+		newCommand:  factory,
 	}, nil
 }
 
-// Start spawns the configured number of workers
+// Start spawns the configured number of workers.
 func (p *Pool) Start() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	log.Printf("Starting %d PHP workers...", p.cfg.WorkerCount)
-
 	metrics.WorkersTotal.Set(float64(p.cfg.WorkerCount))
 
 	for i := 0; i < p.cfg.WorkerCount; i++ {
 		if err := p.spawnWorker(i); err != nil {
+			p.Stop()
 			return err
 		}
 	}
 	return nil
 }
 
-// spawnWorker starts a single PHP process
 func (p *Pool) spawnWorker(id int) error {
-	// Worker script path
 	workerScript := p.cfg.WorkerCommand
 	if !filepath.IsAbs(workerScript) {
 		workerScript = filepath.Join(p.cfg.ProjectRoot, workerScript)
 	}
-
-	// Validate worker script exists before attempting to spawn
-	if _, err := os.Stat(workerScript); os.IsNotExist(err) {
-		return fmt.Errorf("worker script not found: %s", workerScript)
+	if _, err := os.Stat(workerScript); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("worker script not found: %s", workerScript)
+		}
+		return fmt.Errorf("stat worker script %s: %w", workerScript, err)
 	}
 
-	// Construct arguments
 	args := []string{workerScript}
-
-	// If a custom php.ini is provided
 	if p.cfg.PhpIni != "" {
 		args = append([]string{"-c", p.cfg.PhpIni}, args...)
 	}
-
-	cmd := exec.Command(p.phpMgr.BinaryPath, args...)
-
-	// Wire up Pipes
+	cmd := p.newCommand(p.phpMgr.BinaryPath, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("failed to get stdin pipe: %w", err)
@@ -107,8 +124,6 @@ func (p *Pool) spawnWorker(id int) error {
 	if err != nil {
 		return fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
-
-	// stderr can go to main log
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
@@ -123,23 +138,29 @@ func (p *Pool) spawnWorker(id int) error {
 		Stdout:    stdout,
 		Enc:       json.NewEncoder(stdin),
 		Dec:       json.NewDecoder(stdout),
+		alive:     true,
 	}
+
+	p.mu.Lock()
 	p.workers = append(p.workers, worker)
+	p.mu.Unlock()
 
-	// Add to available queue
-	p.workerQueue <- worker
+	select {
+	case p.workerQueue <- worker:
+	case <-p.ctx.Done():
+		p.terminate(worker)
+		return fmt.Errorf("pool shutting down")
+	}
 
-	// Watch the process in a goroutine
 	go p.watchWorker(worker)
-
 	return nil
 }
 
-// watchWorker monitors a worker process and restarts it if it exits
 func (p *Pool) watchWorker(worker *Process) {
 	err := worker.cmd.Wait()
+	worker.markDead()
+	p.removeWorker(worker)
 
-	// Check if the pool is shutting down
 	select {
 	case <-p.ctx.Done():
 		return
@@ -147,113 +168,128 @@ func (p *Pool) watchWorker(worker *Process) {
 	}
 
 	log.Printf("Worker %d exited: %v. Restarting...", worker.ID, err)
-
-	// Simple backoff
-	time.Sleep(1 * time.Second)
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Remove old worker from p.workers list
-	for i, w := range p.workers {
-		if w == worker {
-			p.workers = append(p.workers[:i], p.workers[i+1:]...)
-			break
-		}
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-p.ctx.Done():
+		return
+	case <-timer.C:
 	}
 
-	p.spawnWorker(worker.ID)
+	select {
+	case <-p.ctx.Done():
+		return
+	default:
+	}
+	if err := p.spawnWorker(worker.ID); err != nil {
+		log.Printf("Worker %d restart failed: %v", worker.ID, err)
+	}
 }
 
-// HandleRequest dispatches a request to an available worker
+func (p *Pool) removeWorker(target *Process) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, worker := range p.workers {
+		if worker == target {
+			p.workers = append(p.workers[:i], p.workers[i+1:]...)
+			return
+		}
+	}
+}
+
+func (p *Pool) terminate(worker *Process) {
+	if !worker.markDead() {
+		return
+	}
+	if worker.cmd.Process != nil {
+		_ = worker.cmd.Process.Kill()
+	}
+}
+
+// HandleRequest dispatches a request to an available live worker.
 func (p *Pool) HandleRequest(req map[string]interface{}) (map[string]interface{}, error) {
-	// Pick an available worker from the queue (blocks if all busy)
-	var w *Process
-	select {
-	case w = <-p.workerQueue:
-		// Got a worker
-	case <-p.ctx.Done():
-		return nil, fmt.Errorf("pool shutting down")
+	var worker *Process
+	for {
+		select {
+		case candidate := <-p.workerQueue:
+			if candidate.isAlive() {
+				worker = candidate
+				goto leased
+			}
+		case <-p.ctx.Done():
+			return nil, fmt.Errorf("pool shutting down")
+		}
 	}
 
+leased:
 	p.wg.Add(1)
 	defer p.wg.Done()
-
-	// Always put the worker back (or handle its death)
-	defer func() {
-		// Only put back if the command is still running
-		if w.cmd.ProcessState == nil || !w.cmd.ProcessState.Exited() {
-			p.workerQueue <- w
-		}
-	}()
+	defer p.release(worker)
 
 	errCh := make(chan error, 1)
 	respCh := make(chan map[string]interface{}, 1)
-
 	go func() {
-		// Send
-		if err := w.Enc.Encode(req); err != nil {
-			errCh <- fmt.Errorf("worker %d encode error: %w", w.ID, err)
+		if err := worker.Enc.Encode(req); err != nil {
+			errCh <- fmt.Errorf("worker %d encode error: %w", worker.ID, err)
 			return
 		}
-
-		// Receive
 		var resp map[string]interface{}
-		if err := w.Dec.Decode(&resp); err != nil {
-			errCh <- fmt.Errorf("worker %d decode error: %w", w.ID, err)
+		if err := worker.Dec.Decode(&resp); err != nil {
+			errCh <- fmt.Errorf("worker %d decode error: %w", worker.ID, err)
 			return
 		}
 		respCh <- resp
 	}()
 
 	timeoutDuration := time.Duration(p.cfg.Timeout) * time.Second
-	if timeoutDuration == 0 {
+	if timeoutDuration <= 0 {
 		timeoutDuration = 30 * time.Second
 	}
-
+	timer := time.NewTimer(timeoutDuration)
+	defer timer.Stop()
 	select {
 	case resp := <-respCh:
 		return resp, nil
 	case err := <-errCh:
-		// If error occurred in encode/decode, the stream might be corrupted.
-		// Kill the worker so it gets restarted.
-		if w.cmd.Process != nil {
-			w.cmd.Process.Kill()
-		}
+		p.terminate(worker)
 		return nil, err
-	case <-time.After(timeoutDuration):
-		if w.cmd.Process != nil {
-			w.cmd.Process.Kill()
-		}
-		return nil, fmt.Errorf("worker %d timed out after %s", w.ID, timeoutDuration)
+	case <-timer.C:
+		p.terminate(worker)
+		return nil, fmt.Errorf("worker %d timed out after %s", worker.ID, timeoutDuration)
 	}
 }
 
-// Stop terminates all workers
+func (p *Pool) release(worker *Process) {
+	if !worker.isAlive() {
+		return
+	}
+	select {
+	case p.workerQueue <- worker:
+	case <-p.ctx.Done():
+		p.terminate(worker)
+	}
+}
+
+// Stop terminates all workers and prevents future restarts.
 func (p *Pool) Stop() {
 	p.cancel()
 
-	// Wait for active requests to finish
-	// We give them a few seconds then kill
 	done := make(chan struct{})
 	go func() {
 		p.wg.Wait()
 		close(done)
 	}()
-
 	select {
 	case <-done:
-		log.Println("All active requests finished.")
 	case <-time.After(5 * time.Second):
 		log.Println("Timeout waiting for requests, killing workers...")
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	for _, w := range p.workers {
-		if w.cmd.Process != nil {
-			w.cmd.Process.Kill()
-		}
+	workers := p.workers
+	p.workers = nil
+	p.mu.Unlock()
+	for _, worker := range workers {
+		p.terminate(worker)
 	}
 }

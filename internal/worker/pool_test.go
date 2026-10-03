@@ -4,20 +4,10 @@ import (
 	"strconv"
 	"testing"
 	"time"
-
-	"github.com/tusk-framework/tusk-engine/internal/config"
 )
 
 func TestPoolConcurrency(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.WorkerCount = 2
-	cfg.WorkerCommand = "test_worker.php"
-	cfg.ProjectRoot = "./"
-
-	pool, err := NewPool(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create pool: %v", err)
-	}
+	pool := newTestPool(t, 2)
 
 	if err := pool.Start(); err != nil {
 		t.Fatalf("Failed to start pool: %v", err)
@@ -36,11 +26,7 @@ func TestPoolConcurrency(t *testing.T) {
 	results := make(chan error, 3)
 
 	sendReq := func(sleepMs int) {
-		_, err := pool.HandleRequest(map[string]interface{}{
-			"query": map[string]string{
-				"sleep": strconv.Itoa(sleepMs),
-			},
-		})
+		_, err := pool.HandleRequest(map[string]interface{}{"query": map[string]string{"sleep": strconv.Itoa(sleepMs)}})
 		results <- err
 	}
 
@@ -68,15 +54,7 @@ func TestPoolConcurrency(t *testing.T) {
 }
 
 func TestHeaderRelay(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.WorkerCount = 1
-	cfg.WorkerCommand = "test_worker.php"
-	cfg.ProjectRoot = "./"
-
-	pool, err := NewPool(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create pool: %v", err)
-	}
+	pool := newTestPool(t, 1)
 
 	if err := pool.Start(); err != nil {
 		t.Fatalf("Failed to start pool: %v", err)
