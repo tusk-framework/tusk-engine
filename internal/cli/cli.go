@@ -56,9 +56,15 @@ func Run(args []string) {
 		}
 		runServerWithConfig(cfg)
 	case "setup":
-		runSetup(cfg)
+		if hasArg(args[2:], "--toolchain") {
+			runToolchainSetup(cfg)
+		} else {
+			runSetup(cfg)
+		}
 	case "doctor":
 		runDoctor(cfg, args[2:])
+	case "toolchain":
+		runToolchainCommand(cfg, args[2:])
 	case "install":
 		runInstall(args[2:])
 	case "add":
@@ -107,6 +113,8 @@ func printHelp() {
 	fmt.Println("  tusk dev [worker-file]    Start in development mode (alias for start)")
 	fmt.Println("  tusk setup                Verify and setup environment")
 	fmt.Println("  tusk doctor [--json]      Diagnose PHP, Composer, and RoadRunner")
+	fmt.Println("  tusk toolchain list       Show the resolved project toolchain")
+	fmt.Println("  tusk toolchain pin X@V    Pin a tool version in .tusk/toolchain.json")
 	fmt.Println("  tusk init                 Initialize a new tusk.json file")
 	fmt.Println("\nPackage Management:")
 	fmt.Println("  tusk install              Install PHP dependencies")
@@ -131,6 +139,41 @@ func printHelp() {
 func runSetup(cfg *config.Config) {
 	fmt.Println("--- Tusk Environment Setup ---")
 	runDoctor(cfg, nil)
+}
+
+func runToolchainSetup(cfg *config.Config) {
+	fmt.Println("--- Tusk Toolchain Setup ---")
+	runDoctor(cfg, nil)
+	fmt.Println("\nProvisioning is explicit and will not replace executables automatically.")
+	fmt.Println("Use 'tusk toolchain pin <tool>@<version>' to record project requirements.")
+}
+
+func runToolchainCommand(cfg *config.Config, args []string) {
+	if len(args) == 0 || args[0] == "list" {
+		runDoctor(cfg, args[1:])
+		return
+	}
+	if args[0] != "pin" || len(args) != 2 {
+		log.Fatalf("Usage: tusk toolchain list [--json] | tusk toolchain pin <tool>@<version>")
+	}
+
+	name, version, err := toolchain.ParsePin(args[1])
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := toolchain.Pin(cfg.ProjectRoot, name, version); err != nil {
+		log.Fatalf("Failed to pin toolchain: %v", err)
+	}
+	fmt.Printf("Pinned %s@%s in .tusk/toolchain.json\n", name, version)
+}
+
+func hasArg(args []string, wanted string) bool {
+	for _, arg := range args {
+		if arg == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func runDoctor(cfg *config.Config, args []string) {

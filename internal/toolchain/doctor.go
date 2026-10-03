@@ -103,6 +103,68 @@ func LoadManifest(root string) (Manifest, error) {
 	return manifest, nil
 }
 
+// ParsePin parses the CLI form name@version.
+func ParsePin(value string) (ToolName, string, error) {
+	parts := strings.SplitN(strings.TrimSpace(value), "@", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.ContainsAny(parts[1], "\r\n") {
+		return "", "", fmt.Errorf("toolchain pin must use name@version")
+	}
+
+	name := ToolName(strings.ToLower(parts[0]))
+	switch name {
+	case PHP, Composer, RoadRunner:
+	default:
+		return "", "", fmt.Errorf("unknown tool %q", parts[0])
+	}
+	return name, parts[1], nil
+}
+
+// Pin updates one requested version in the project manifest. It preserves
+// any existing executable path and never downloads or replaces a binary.
+func Pin(root string, name ToolName, version string) (Manifest, error) {
+	if strings.TrimSpace(version) == "" {
+		return Manifest{}, errors.New("toolchain version cannot be empty")
+	}
+	if name != PHP && name != Composer && name != RoadRunner {
+		return Manifest{}, fmt.Errorf("unknown tool %q", name)
+	}
+
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("resolve project root: %w", err)
+	}
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		return Manifest{}, err
+	}
+	spec := ToolSpec{Version: version}
+	switch name {
+	case PHP:
+		spec.Path = manifest.PHP.Path
+		manifest.PHP = spec
+	case Composer:
+		spec.Path = manifest.Composer.Path
+		manifest.Composer = spec
+	case RoadRunner:
+		spec.Path = manifest.RoadRunner.Path
+		manifest.RoadRunner = spec
+	}
+
+	manifestDir := filepath.Join(root, ".tusk")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		return Manifest{}, fmt.Errorf("create toolchain directory: %w", err)
+	}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return Manifest{}, fmt.Errorf("encode toolchain manifest: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(filepath.Join(manifestDir, "toolchain.json"), data, 0o644); err != nil {
+		return Manifest{}, fmt.Errorf("write toolchain manifest: %w", err)
+	}
+	return manifest, nil
+}
+
 // Diagnose resolves the supported tools without changing the environment.
 func Diagnose(options DiagnosticOptions) (Report, error) {
 	root, err := filepath.Abs(options.Root)

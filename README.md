@@ -99,6 +99,23 @@ Create or edit `tusk.json` in your project root:
 
 Requests above the configured body or upload limits are rejected with HTTP 413. Static files are served only from `public/`; path traversal attempts are rejected. Scripts from `tusk.json` override scripts with the same name from `composer.json`, while non-conflicting scripts are merged.
 
+### Toolchain diagnosis
+
+The Engine can inspect the exact PHP, Composer, and RoadRunner executables
+available to the project without changing the machine:
+
+```bash
+tusk doctor
+tusk doctor --json
+tusk toolchain list
+tusk toolchain pin php@8.3
+```
+
+When `.tusk/toolchain.json` declares a relative executable path, the project
+binary takes precedence over `PATH`. The current slice records requirements
+and diagnoses the environment; provisioning will be added as an explicit,
+verified operation and will never silently replace executables.
+
 **Or use composer.json** - tusk automatically reads scripts and configuration:
 ```json
 {

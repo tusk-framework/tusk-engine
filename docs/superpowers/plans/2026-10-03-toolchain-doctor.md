@@ -14,6 +14,7 @@ implemented.
 - Capture executable path, source, detected version, requested version, and
   status in a structured report.
 - Expose the report through `tusk doctor` in human-readable and JSON forms.
+- Expose `tusk toolchain list` and a safe `tusk toolchain pin` manifest edit.
 - Reuse the same report from `tusk setup`.
 
 ## Explicit non-goals

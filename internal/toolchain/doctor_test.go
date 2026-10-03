@@ -130,3 +130,46 @@ func TestReportJSONIsStableAndUseful(t *testing.T) {
 		}
 	}
 }
+
+func TestPinWritesOnlyTheRequestedVersionAndPreservesPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".tusk"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{"php":{"version":"8.2","path":".tusk/bin/php"}}`
+	if err := os.WriteFile(filepath.Join(root, ".tusk", "toolchain.json"), []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := Pin(root, PHP, "8.3")
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if manifest.PHP.Version != "8.3" || manifest.PHP.Path != ".tusk/bin/php" {
+		t.Fatalf("PHP manifest = %#v, want version and path preserved", manifest.PHP)
+	}
+
+	loaded, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PHP != manifest.PHP {
+		t.Fatalf("loaded manifest = %#v, want %#v", loaded.PHP, manifest.PHP)
+	}
+}
+
+func TestParsePinRejectsUnknownToolsAndMalformedValues(t *testing.T) {
+	for _, input := range []string{"php", "unknown@1", "php@", "@8.3"} {
+		if _, _, err := ParsePin(input); err == nil {
+			t.Fatalf("ParsePin(%q) expected error", input)
+		}
+	}
+
+	name, version, err := ParsePin("roadrunner@2025.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != RoadRunner || version != "2025.1" {
+		t.Fatalf("ParsePin() = %q, %q", name, version)
+	}
+}
