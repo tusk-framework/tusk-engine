@@ -1,27 +1,29 @@
-# Tusk Native Engine
+# Tusk Engine
 
-The **Tusk Native Engine** is the optional native backend for the Tusk Framework: a high-performance application server and PHP worker supervisor written in Go. The framework's primary production runtime is RoadRunner; this engine remains available when a self-contained Tusk-owned HTTP/worker stack is preferred.
+The **Tusk Engine** is the Go control plane for the Tusk Framework and its RoadRunner runtime. It owns project configuration, RoadRunner lifecycle, readiness, diagnostics, and platform operations. RoadRunner owns HTTP, PHP workers, IPC, pooling, recycling, and request limits.
+
+The embedded native HTTP/NDJSON server is a frozen migration-era implementation detail. New deployments use RoadRunner; the native path is not a second supported platform architecture.
 
 ## Features
 
-- **High Performance**: Uses Go's `net/http` for event-driven networking and standard I/O pipes for communicating with PHP workers.
-- **Portable**: Runs with the configured PHP binary and can later grow a managed sidecar runtime without changing the worker protocol.
-- **Standalone Backend**: Provides a Tusk-owned HTTP server, worker pool, and unified CLI when the native backend is selected.
+- **Runtime Control**: Validates, starts, monitors, reloads, and stops RoadRunner without duplicating its worker pool.
+- **Portable**: Manages the configured RoadRunner/PHP process boundary across supported development and deployment environments.
+- **Unified CLI**: Provides project, lifecycle, diagnostics, and platform commands above the runtime.
 - **Dual Config Support**: Works with both `tusk.json` and standard `composer.json` - use whichever you prefer!
 - **Package Management**: Composer-backed convenience commands; Composer remains the dependency resolver and lockfile authority.
-- **Unified CLI**: The `tusk` binary handles server management, dependency management, and framework commands.
+- **Project CLI**: The `tusk` binary handles project management, dependency commands, diagnostics, and framework commands.
 - **Dynamic Config**: Automatically loads settings from `tusk.json` or `composer.json`.
-- **Process Management**: Automatically supervises PHP workers, restarting them if they crash.
+- **Process Management**: Supervises the RoadRunner process and reports runtime failures.
 
 ## Architecture
 
 ```mermaid
 graph TD
-    subgraph Engine ["Tusk Engine (Go)"]
-        Server["HTTP Server"] --> Pool["Worker Pool"]
+    subgraph Engine ["Tusk Engine (Go control plane)"]
+        Config["Config + lifecycle"] --> RR["RoadRunner child"]
     end
-    
-    Pool -- "stdin / stdout (NDJSON)" --> Worker["PHP Worker (Framework)"]
+
+    RR --> Worker["PHP Workers (Tusk Framework)"]
     
     style Engine fill:#f9f9f9,stroke:#333,stroke-width:1px
     style Worker fill:#fff,stroke:#333,stroke-width:1px
@@ -148,9 +150,9 @@ tusk test
 > Use `tusk run <script>` for explicit script execution, or just `tusk <script>` as shorthand.
 > Both work the same way, but `tusk run` makes it clear you're running a script.
 
-### 5. Start the Server
+### 5. Start RoadRunner
 ```bash
-# Use default worker.php
+# Start the managed RoadRunner runtime
 tusk start
 
 # Or specify a custom worker file
@@ -158,34 +160,33 @@ tusk start custom-worker.php
 ```
 
 > [!TIP]
-> You can customize the worker file in two ways:
+> The engine's runtime manager generates or validates the RoadRunner command/configuration. You can customize the worker file in two ways:
 > 1. **Command-line**: `tusk start my-worker.php` (takes precedence)
 > 2. **Config file**: Set `"worker_command": "my-worker.php"` in `tusk.json`
 
-## Why Use Tusk Server Instead of php -S?
+## Why Use Tusk with RoadRunner?
 
-Tusk's built-in server is **much more powerful** than PHP's development server (`php -S`):
+Tusk's RoadRunner control plane preserves the persistent PHP model while giving the runtime a single owner for HTTP and worker supervision:
 
 ### ⚡ Performance & Features
-- **Stateful Workers**: Unlike `php -S` which creates a new process per request, tusk maintains a pool of long-running PHP workers
+- **Stateful Workers**: Unlike `php -S` which creates a new process per request, RoadRunner maintains a pool of long-running PHP workers
 - **State Management**: Workers keep state between requests - perfect for caching, connection pooling, and performance
-- **Auto-Restart**: Workers automatically restart if they crash
-- **Concurrent Requests**: Handle multiple requests simultaneously with a worker pool
-- **Production-Ready**: Same server for development and production
+- **Auto-Restart**: RoadRunner recycles workers according to its limits and supervision policy
+- **Concurrent Requests**: RoadRunner handles the worker pool and concurrency
+- **Production-Ready**: The same lifecycle contract is used in development and production
 
 ### 📝 Use Tusk Server in Scripts
-Replace `php -S localhost:8000` with `tusk start` or `tusk dev`:
+Use `tusk start` or `tusk dev` to launch the managed RoadRunner runtime:
 
 ```json
 {
   "scripts": {
-    "dev": "tusk start",        // ✅ Use tusk's powerful server
-    "old": "php -S localhost:8000"  // ❌ Don't use PHP's simple server
+    "dev": "tusk start"
   }
 }
 ```
 
-The `tusk dev` command is an alias for `tusk start` - both start the high-performance tusk server.
+The `tusk dev` command is an alias for `tusk start`.
 
 ## Composer-backed Package Commands
 
@@ -242,7 +243,5 @@ Tusk reads the relevant `composer.json` fields, including:
 
 Dependency resolution and lockfile generation remain Composer responsibilities.
 
-## Protocol (NDJSON)
-The engine communicates with PHP workers using Newline Delimited JSON. The engine acts as a reverse proxy, parsing static files, query strings, and multipart uploads securely.
-- **Request**: `{ "method": "GET", "url": "/", "query": {...}, "headers": {...}, "cookies": {...}, "body": "...", "parsedBody": {...}, "uploadedFiles": {...} }`
-- **Response**: `{ "status": 200, "headers": {...}, "body": "..." }`
+## Runtime boundary
+RoadRunner owns the HTTP and PHP worker protocol. The Engine does not act as a reverse proxy or duplicate RoadRunner's pool. The legacy NDJSON implementation remains only for migration and is not the platform request path.
