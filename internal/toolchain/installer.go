@@ -50,6 +50,15 @@ func (i Installer) Install(artifact Artifact, data []byte) (string, error) {
 	if artifact.GOARCH != "" && goarch != artifact.GOARCH {
 		return "", fmt.Errorf("artifact architecture %s does not match installer %s", artifact.GOARCH, goarch)
 	}
+	if err := safePathSegment("version", artifact.Version); err != nil {
+		return "", err
+	}
+	if err := safePathSegment("operating system", goos); err != nil {
+		return "", err
+	}
+	if err := safePathSegment("architecture", goarch); err != nil {
+		return "", err
+	}
 	entrypoint, err := safeRelativePath(artifact.EntryPoint)
 	if err != nil {
 		return "", fmt.Errorf("invalid artifact entrypoint: %w", err)
@@ -238,4 +247,11 @@ func safeRelativePath(value string) (string, error) {
 		return "", errors.New("path traversal is not allowed")
 	}
 	return filepath.FromSlash(clean), nil
+}
+
+func safePathSegment(label, value string) error {
+	if strings.TrimSpace(value) == "" || value == "." || value == ".." || strings.ContainsAny(value, `/\\:`) {
+		return fmt.Errorf("artifact %s must be a single safe path segment", label)
+	}
+	return nil
 }

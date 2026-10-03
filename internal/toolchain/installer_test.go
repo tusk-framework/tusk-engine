@@ -97,6 +97,20 @@ func TestInstallerRejectsMissingEntrypointUnsupportedFormatAndExistingTarget(t *
 	}
 }
 
+func TestInstallerRejectsPathTraversalInArtifactVersion(t *testing.T) {
+	installer := Installer{Root: t.TempDir(), GOOS: "linux", GOARCH: "amd64"}
+	artifact := installerArtifact("raw", "rr")
+	artifact.Version = "../escape"
+
+	_, err := installer.Install(artifact, []byte("binary"))
+	if err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("version traversal error = %v, want version validation error", err)
+	}
+	if _, err := os.Stat(filepath.Join(installer.Root, "escape")); !os.IsNotExist(err) {
+		t.Fatalf("version traversal escaped installation root: %v", err)
+	}
+}
+
 func installerArtifact(format, entrypoint string) Artifact {
 	return Artifact{
 		Tool:       RoadRunner,

@@ -114,8 +114,14 @@ func validateArtifact(artifact Artifact) error {
 	if artifact.Tool != PHP && artifact.Tool != Composer && artifact.Tool != RoadRunner {
 		return fmt.Errorf("unsupported tool %q", artifact.Tool)
 	}
-	if strings.TrimSpace(artifact.Version) == "" || strings.TrimSpace(artifact.GOOS) == "" || strings.TrimSpace(artifact.GOARCH) == "" {
-		return errors.New("tool, version, and platform fields are required")
+	if err := safePathSegment("version", artifact.Version); err != nil {
+		return err
+	}
+	if err := safePathSegment("operating system", artifact.GOOS); err != nil {
+		return err
+	}
+	if err := safePathSegment("architecture", artifact.GOARCH); err != nil {
+		return err
 	}
 	parsedURL, err := url.Parse(artifact.URL)
 	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
