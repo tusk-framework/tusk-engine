@@ -83,6 +83,15 @@ func TestToolchainSetupOfflineRequiresTrustedCatalog(t *testing.T) {
 	}
 }
 
+func TestToolchainSetupCodeReturnsNonSuccessOnProvisioningError(t *testing.T) {
+	cfg := &config.Config{ProjectRoot: t.TempDir()}
+	var output bytes.Buffer
+	var errorsOutput bytes.Buffer
+	if code := runToolchainSetupCode(cfg, []string{"--offline"}, &output, &errorsOutput); code == 0 {
+		t.Fatalf("runToolchainSetupCode() = %d, want non-zero; stderr = %q", code, errorsOutput.String())
+	}
+}
+
 func TestToolchainCommandsRejectUnknownFlags(t *testing.T) {
 	if _, err := parseDoctorArgs([]string{"--wat"}); err == nil {
 		t.Fatal("parseDoctorArgs() accepted unknown flag")

@@ -2,8 +2,8 @@
 
 ## Status
 
-Approved architectural direction; implementation starts after review of this
-specification.
+Approved architectural direction; provisioning core implemented. Official
+platform catalogs and release key operations remain a follow-up.
 
 ## Goal
 

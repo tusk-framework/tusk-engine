@@ -107,6 +107,17 @@ func Run(args []string) {
 	}
 }
 
+// RunWithExitCode preserves Run's compatibility while allowing the binary to
+// report explicit setup failures to CI and shell scripts.
+func RunWithExitCode(args []string) int {
+	if len(args) >= 3 && args[1] == "setup" && hasArg(args[2:], "--toolchain") {
+		cfg := config.LoadConfig()
+		return runToolchainSetupCode(cfg, args[2:], os.Stdout, os.Stderr)
+	}
+	Run(args)
+	return 0
+}
+
 func printHelp() {
 	fmt.Println("Tusk Engine (v0.1)")
 	fmt.Println("\nUsage:")
@@ -280,6 +291,14 @@ func runToolchainSetupTo(cfg *config.Config, args []string, output io.Writer) er
 		return fmt.Errorf("trusted catalog is not configured at %s; update the Engine catalog before provisioning", catalogPath)
 	}
 	return fmt.Errorf("trusted catalog loading is not available in this Engine build")
+}
+
+func runToolchainSetupCode(cfg *config.Config, args []string, output, errorsOutput io.Writer) int {
+	if err := runToolchainSetupTo(cfg, args, output); err != nil {
+		_, _ = fmt.Fprintln(errorsOutput, err)
+		return 1
+	}
+	return 0
 }
 
 func runServerWithConfig(cfg *config.Config) {

@@ -7,5 +7,5 @@ import (
 )
 
 func main() {
-	cli.Run(os.Args)
+	os.Exit(cli.RunWithExitCode(os.Args))
 }
