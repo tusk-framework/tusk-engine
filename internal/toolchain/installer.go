@@ -239,7 +239,7 @@ func extractTarGz(stage string, data []byte, maxBytes int64) error {
 
 func safeRelativePath(value string) (string, error) {
 	value = strings.ReplaceAll(value, "\\", "/")
-	if value == "" || strings.HasPrefix(value, "/") || filepath.VolumeName(value) != "" {
+	if value == "" || strings.HasPrefix(value, "/") || hasWindowsVolumePrefix(value) || filepath.VolumeName(value) != "" {
 		return "", errors.New("path must be relative")
 	}
 	clean := pathpkg.Clean(value)
@@ -247,6 +247,10 @@ func safeRelativePath(value string) (string, error) {
 		return "", errors.New("path traversal is not allowed")
 	}
 	return filepath.FromSlash(clean), nil
+}
+
+func hasWindowsVolumePrefix(value string) bool {
+	return len(value) >= 2 && ((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) && value[1] == ':'
 }
 
 func safePathSegment(label, value string) error {
