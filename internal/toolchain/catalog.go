@@ -86,7 +86,32 @@ func (v CatalogVerifier) Verify(data []byte) (CatalogPayload, error) {
 	if err := validateCatalog(envelope.Payload); err != nil {
 		return CatalogPayload{}, err
 	}
+	for index, artifact := range envelope.Payload.Artifacts {
+		if err := verifyArtifactSignature(publicKey, artifact); err != nil {
+			return CatalogPayload{}, fmt.Errorf("artifact %d: %w", index, err)
+		}
+	}
 	return envelope.Payload, nil
+}
+
+func verifyArtifactSignature(publicKey ed25519.PublicKey, artifact Artifact) error {
+	signature, err := base64.StdEncoding.DecodeString(artifact.Signature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return errors.New("invalid artifact signature encoding")
+	}
+	canonical, err := artifactSigningBytes(artifact)
+	if err != nil {
+		return fmt.Errorf("canonicalize artifact signature: %w", err)
+	}
+	if !ed25519.Verify(publicKey, canonical, signature) {
+		return errors.New("artifact signature verification failed")
+	}
+	return nil
+}
+
+func artifactSigningBytes(artifact Artifact) ([]byte, error) {
+	artifact.Signature = ""
+	return json.Marshal(artifact)
 }
 
 func validateCatalog(payload CatalogPayload) error {

@@ -97,6 +97,34 @@ func TestCatalogVerifierRejectsInvalidArtifactURLAndSchema(t *testing.T) {
 	}
 }
 
+func TestCatalogVerifierRejectsInvalidArtifactSignature(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := validCatalogPayload()
+	data := marshalSignedCatalog(t, payload, "test-key", privateKey)
+	var envelope SignedCatalog
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Payload.Artifacts[0].Signature = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
+	canonical, err := json.Marshal(envelope.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, canonical))
+	data, err = json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = (CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}}).Verify(data)
+	if err == nil || !strings.Contains(err.Error(), "artifact signature") {
+		t.Fatalf("artifact signature error = %v, want artifact signature error", err)
+	}
+}
+
 func validCatalogPayload() CatalogPayload {
 	return CatalogPayload{
 		SchemaVersion: 1,
@@ -116,6 +144,13 @@ func validCatalogPayload() CatalogPayload {
 
 func marshalSignedCatalog(t *testing.T, payload CatalogPayload, keyID string, privateKey ed25519.PrivateKey) []byte {
 	t.Helper()
+	for index := range payload.Artifacts {
+		canonicalArtifact, err := testArtifactSigningBytes(payload.Artifacts[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload.Artifacts[index].Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, canonicalArtifact))
+	}
 	canonical, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -130,4 +165,9 @@ func marshalSignedCatalog(t *testing.T, payload CatalogPayload, keyID string, pr
 		t.Fatal(err)
 	}
 	return data
+}
+
+func testArtifactSigningBytes(artifact Artifact) ([]byte, error) {
+	artifact.Signature = ""
+	return json.Marshal(artifact)
 }
