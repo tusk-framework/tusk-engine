@@ -125,9 +125,24 @@ func TestCatalogVerifierRejectsInvalidArtifactSignature(t *testing.T) {
 	}
 }
 
+func TestCatalogVerifierRejectsArtifactHostOutsideAllowlist(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := validCatalogPayload()
+	payload.AllowedHosts = []string{"trusted.example"}
+
+	_, err = (CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}}).Verify(marshalSignedCatalog(t, payload, "test-key", privateKey))
+	if err == nil || !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("host allowlist error = %v, want allowlist error", err)
+	}
+}
+
 func validCatalogPayload() CatalogPayload {
 	return CatalogPayload{
 		SchemaVersion: 1,
+		AllowedHosts:  []string{"cdn.example"},
 		Artifacts: []Artifact{{
 			Tool:       RoadRunner,
 			Version:    "2025.1.0",

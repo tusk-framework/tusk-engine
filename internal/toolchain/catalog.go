@@ -31,6 +31,7 @@ type Artifact struct {
 // CatalogPayload is the signed portion of a toolchain catalog.
 type CatalogPayload struct {
 	SchemaVersion int        `json:"schema_version"`
+	AllowedHosts  []string   `json:"allowed_hosts"`
 	Artifacts     []Artifact `json:"artifacts"`
 }
 
@@ -121,10 +122,25 @@ func validateCatalog(payload CatalogPayload) error {
 	if len(payload.Artifacts) == 0 {
 		return errors.New("catalog contains no artifacts")
 	}
+	if len(payload.AllowedHosts) == 0 {
+		return errors.New("catalog host allowlist is empty")
+	}
+	allowedHosts := make(map[string]struct{}, len(payload.AllowedHosts))
+	for _, host := range payload.AllowedHosts {
+		host = strings.ToLower(strings.TrimSpace(host))
+		if host == "" {
+			return errors.New("catalog host allowlist contains an empty host")
+		}
+		allowedHosts[host] = struct{}{}
+	}
 	seen := make(map[string]struct{}, len(payload.Artifacts))
 	for index, artifact := range payload.Artifacts {
 		if err := validateArtifact(artifact); err != nil {
 			return fmt.Errorf("artifact %d: %w", index, err)
+		}
+		parsedURL, _ := url.Parse(artifact.URL)
+		if _, ok := allowedHosts[strings.ToLower(parsedURL.Hostname())]; !ok {
+			return fmt.Errorf("artifact %d host %q is outside the catalog allowlist", index, parsedURL.Hostname())
 		}
 		key := strings.Join([]string{string(artifact.Tool), artifact.Version, artifact.GOOS, artifact.GOARCH}, "/")
 		if _, exists := seen[key]; exists {
