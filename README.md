@@ -5,10 +5,10 @@ The **Tusk Native Engine** is the high-performance, all-in-one application serve
 ## Features
 
 - **High Performance**: Uses Go's `net/http` for event-driven networking and standard I/O pipes for communicating with PHP workers.
-- **Portable**: Can download and manage its own PHP runtime (Sidecar mode), requiring zero system dependencies.
+- **Portable**: Runs with the configured PHP binary and can later grow a managed sidecar runtime without changing the worker protocol.
 - **All-in-One Tool**: Like Bun for Node.js, tusk manages your entire PHP project with a unified CLI.
 - **Dual Config Support**: Works with both `tusk.json` and standard `composer.json` - use whichever you prefer!
-- **Package Management**: Built-in commands to manage PHP dependencies without needing to invoke composer directly.
+- **Package Management**: Composer-backed convenience commands; Composer remains the dependency resolver and lockfile authority.
 - **Unified CLI**: The `tusk` binary handles server management, dependency management, and framework commands.
 - **Dynamic Config**: Automatically loads settings from `tusk.json` or `composer.json`.
 - **Process Management**: Automatically supervises PHP workers, restarting them if they crash.
@@ -85,12 +85,17 @@ Create or edit `tusk.json` in your project root:
     "worker_command": "worker.php",
     "public_dir": "public",
     "timeout": 30,
+    "max_body_bytes": 10485760,
+    "max_upload_bytes": 10485760,
+    "max_upload_files": 20,
     "scripts": {
         "dev": "tusk start",
         "test": "phpunit"
     }
 }
 ```
+
+Requests above the configured body or upload limits are rejected with HTTP 413. Static files are served only from `public/`; path traversal attempts are rejected. Scripts from `tusk.json` override scripts with the same name from `composer.json`, while non-conflicting scripts are merged.
 
 **Or use composer.json** - tusk automatically reads scripts and configuration:
 ```json
@@ -109,7 +114,7 @@ Create or edit `tusk.json` in your project root:
 > [!NOTE]
 > If both `tusk.json` and `composer.json` exist, tusk.json takes priority but scripts from both are merged.
 
-### 3. Manage Dependencies
+### 3. Manage Dependencies with Composer
 ```bash
 # Install dependencies
 tusk install
@@ -182,19 +187,19 @@ Replace `php -S localhost:8000` with `tusk start` or `tusk dev`:
 
 The `tusk dev` command is an alias for `tusk start` - both start the high-performance tusk server.
 
-## All-in-One Package Management
+## Composer-backed Package Commands
 
-Tusk is designed to be like **Bun for PHP** - a comprehensive tool that manages your entire project:
+Tusk provides a unified CLI around the PHP runtime while keeping Composer as the source of truth for dependency resolution:
 
 ### 🔄 Automatic Config Detection
 - Reads from `tusk.json` (custom Tusk config)
 - Falls back to `composer.json` (standard PHP)
 - Merges scripts from both if both exist
 - Priority: `tusk.json` > `composer.json`
-- Supports full composer.json schema (keywords, authors, license, etc.)
+- Reads the Composer metadata and scripts needed by the engine without reimplementing Composer's dependency solver
 
-### 📦 Built-in Dependency Management
-No need to switch between `tusk` and `composer` commands:
+### 📦 Composer-backed Dependency Commands
+These convenience commands delegate dependency work to Composer; Composer must still be installed:
 
 ```bash
 tusk install              # Install all dependencies
@@ -226,14 +231,16 @@ Everything through one command:
 - Script execution: `tusk run <script>` or `tusk <script>`
 - Framework commands: `tusk make:controller` (proxied to PHP)
 
-### 📋 Composer Schema Support
-Tusk now supports the complete composer.json schema including:
+### 📋 Composer Integration
+Tusk reads the relevant `composer.json` fields, including:
 - Package metadata: name, description, version, type, keywords
 - Licensing: license, authors, homepage
-- Dependencies: require, require-dev, conflict, replace, provide, suggest
+- Dependencies for display/configuration: require, require-dev, conflict, replace, provide, suggest
 - Autoloading: autoload, autoload-dev (PSR-4, PSR-0, classmap, files)
 - Configuration: config, extra, bin, repositories
-- Scripts: Including array-style scripts with proper execution
+- Scripts, including array-style scripts with proper execution
+
+Dependency resolution and lockfile generation remain Composer responsibilities.
 
 ## Protocol (NDJSON)
 The engine communicates with PHP workers using Newline Delimited JSON. The engine acts as a reverse proxy, parsing static files, query strings, and multipart uploads securely.
