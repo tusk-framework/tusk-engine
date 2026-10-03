@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,18 +13,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tusk-framework/tusk-engine/internal/config"
 	"github.com/tusk-framework/tusk-engine/internal/metrics"
-	"github.com/tusk-framework/tusk-engine/internal/worker"
 )
 
 // Server is the HTTP server for Tusk
 type Server struct {
 	cfg  *config.Config
-	pool *worker.Pool
+	pool WorkerHandler
 	http *http.Server
 }
 
 // NewServer creates a new HTTP server
-func NewServer(cfg *config.Config, pool *worker.Pool) *Server {
+func NewServer(cfg *config.Config, pool WorkerHandler) *Server {
 	return &Server{
 		cfg:  cfg,
 		pool: pool,
@@ -59,10 +57,24 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// 1. Static file check
-	publicPath := filepath.Join(s.cfg.ProjectRoot, s.cfg.PublicDir, r.URL.Path)
-	if stat, err := os.Stat(publicPath); err == nil && !stat.IsDir() && r.URL.Path != "/" {
-		http.ServeFile(w, r, publicPath)
-		return
+	if r.URL.Path != "/" {
+		publicPath, safe := safePublicPath(s.cfg.ProjectRoot, s.cfg.PublicDir, r.URL.Path)
+		if !safe {
+			http.NotFound(w, r)
+			return
+		}
+		if stat, err := os.Stat(publicPath); err == nil && !stat.IsDir() {
+			http.ServeFile(w, r, publicPath)
+			return
+		}
+	}
+
+	if s.cfg.MaxBodyBytes > 0 {
+		if r.ContentLength > s.cfg.MaxBodyBytes {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
 	}
 
 	// 2. Extract Headers and Query
@@ -102,9 +114,22 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			}
 
 			uploadedFiles = make(map[string]interface{})
+			totalFiles := 0
+			for _, files := range r.MultipartForm.File {
+				totalFiles += len(files)
+			}
+			if totalFiles > s.cfg.MaxUploadFiles {
+				http.Error(w, "too many uploaded files", http.StatusRequestEntityTooLarge)
+				return
+			}
+
 			for k, files := range r.MultipartForm.File {
 				var fileInfoList []map[string]interface{}
 				for _, fileHeader := range files {
+					if fileHeader.Size > s.cfg.MaxUploadBytes {
+						http.Error(w, "uploaded file too large", http.StatusRequestEntityTooLarge)
+						return
+					}
 					file, err := fileHeader.Open()
 					if err != nil {
 						continue
@@ -134,6 +159,12 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 					uploadedFiles[k] = fileInfoList
 				}
 			}
+		} else if strings.Contains(err.Error(), "request body too large") {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		} else {
+			http.Error(w, "invalid multipart request", http.StatusBadRequest)
+			return
 		}
 	} else if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
 		if err := r.ParseForm(); err == nil {
@@ -143,10 +174,24 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 					parsedBody[k] = v[0]
 				}
 			}
+		} else if strings.Contains(err.Error(), "request body too large") {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		} else {
+			http.Error(w, "invalid form request", http.StatusBadRequest)
+			return
 		}
 	} else {
 		// Read raw body
-		bodyBytes, _ := io.ReadAll(r.Body)
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			if strings.Contains(err.Error(), "request body too large") {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			} else {
+				http.Error(w, "failed to read request body", http.StatusBadRequest)
+			}
+			return
+		}
 		rawBody = string(bodyBytes)
 	}
 
