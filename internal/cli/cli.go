@@ -18,6 +18,7 @@ import (
 	"github.com/tusk-framework/tusk-engine/internal/config"
 	"github.com/tusk-framework/tusk-engine/internal/php"
 	"github.com/tusk-framework/tusk-engine/internal/server"
+	"github.com/tusk-framework/tusk-engine/internal/toolchain"
 	"github.com/tusk-framework/tusk-engine/internal/worker"
 )
 
@@ -56,6 +57,8 @@ func Run(args []string) {
 		runServerWithConfig(cfg)
 	case "setup":
 		runSetup(cfg)
+	case "doctor":
+		runDoctor(cfg, args[2:])
 	case "install":
 		runInstall(args[2:])
 	case "add":
@@ -98,11 +101,12 @@ func Run(args []string) {
 }
 
 func printHelp() {
-	fmt.Println("Tusk Native Engine (v0.1)")
+	fmt.Println("Tusk Engine (v0.1)")
 	fmt.Println("\nUsage:")
 	fmt.Println("  tusk start [worker-file]  Start the Application Server")
 	fmt.Println("  tusk dev [worker-file]    Start in development mode (alias for start)")
 	fmt.Println("  tusk setup                Verify and setup environment")
+	fmt.Println("  tusk doctor [--json]      Diagnose PHP, Composer, and RoadRunner")
 	fmt.Println("  tusk init                 Initialize a new tusk.json file")
 	fmt.Println("\nPackage Management:")
 	fmt.Println("  tusk install              Install PHP dependencies")
@@ -126,21 +130,53 @@ func printHelp() {
 
 func runSetup(cfg *config.Config) {
 	fmt.Println("--- Tusk Environment Setup ---")
+	runDoctor(cfg, nil)
+}
 
-	// 1. Check PHP
-	mgr, err := php.NewManager(cfg.PhpBinary)
-	if err != nil {
-		fmt.Printf("PHP Error: %v\n", err)
-		fmt.Println("Tip: Install PHP or set 'php_binary' in tusk.json")
-	} else {
-		fmt.Printf("PHP Found: %s\n", mgr.BinaryPath)
+func runDoctor(cfg *config.Config, args []string) {
+	jsonOutput := false
+	for _, arg := range args {
+		if arg == "--json" {
+			jsonOutput = true
+		}
 	}
 
-	// 2. Check Paths
-	cwd, _ := os.Getwd()
-	fmt.Printf("Project Root: %s\n", cwd)
+	report, err := toolchain.Diagnose(toolchain.DiagnosticOptions{
+		Root: cfg.ProjectRoot,
+		Overrides: map[toolchain.ToolName]string{
+			toolchain.PHP: cfg.PhpBinary,
+		},
+	})
+	if err != nil {
+		log.Printf("Toolchain diagnosis failed: %v", err)
+		return
+	}
 
-	fmt.Println("\nTusk is ready to go!")
+	if jsonOutput {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			log.Printf("Failed to encode toolchain report: %v", err)
+			return
+		}
+		fmt.Println(string(data))
+		return
+	}
+
+	fmt.Printf("Project Root: %s\n", report.ProjectRoot)
+	fmt.Printf("Manifest: %s\n\n", report.ManifestPath)
+	for _, tool := range report.Tools {
+		if tool.Available {
+			fmt.Printf("%-10s %-17s %s (%s)\n", tool.Name, tool.Status, tool.Path, tool.Source)
+			continue
+		}
+		fmt.Printf("%-10s %-17s %s\n", tool.Name, tool.Status, tool.Error)
+	}
+
+	if report.Ready {
+		fmt.Println("\nToolchain is ready.")
+		return
+	}
+	fmt.Println("\nToolchain is incomplete. Install the missing tools or add project-local paths to .tusk/toolchain.json.")
 }
 
 func runServerWithConfig(cfg *config.Config) {
