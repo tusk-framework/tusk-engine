@@ -48,7 +48,7 @@ COPY --from=builder /app/tusk /usr/local/bin/tusk
 # Wait, the engine spawns `worker.php` which is the bridge.
 # The bridge `worker.php` is currently in the root of the repo.
 # We should probably compile/embed it or copy it.
-COPY worker.php /usr/local/bin/worker.php
+COPY worker.php /app/worker.php
 
 # Create a default tusk.json
 RUN echo '{"port": 8080, "worker_count": 4, "address": "0.0.0.0", "project_root": "/app"}' > /etc/tusk.json

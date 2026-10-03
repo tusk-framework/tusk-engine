@@ -13,6 +13,7 @@ go.work
 
 # --- Tusk Engine ---
 .tusk/
+/.worktrees/
 config.json
 *.log
 custom-worker.php

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/tusk-framework/tusk-engine/internal/config"
 	"github.com/tusk-framework/tusk-engine/internal/php"
 	"github.com/tusk-framework/tusk-engine/internal/server"
+	"github.com/tusk-framework/tusk-engine/internal/toolchain"
 	"github.com/tusk-framework/tusk-engine/internal/worker"
 )
 
@@ -55,7 +57,15 @@ func Run(args []string) {
 		}
 		runServerWithConfig(cfg)
 	case "setup":
-		runSetup(cfg)
+		if hasArg(args[2:], "--toolchain") {
+			runToolchainSetup(cfg)
+		} else {
+			runSetup(cfg)
+		}
+	case "doctor":
+		runDoctor(cfg, args[2:])
+	case "toolchain":
+		runToolchainCommand(cfg, args[2:])
 	case "install":
 		runInstall(args[2:])
 	case "add":
@@ -97,12 +107,27 @@ func Run(args []string) {
 	}
 }
 
+// RunWithExitCode preserves Run's compatibility while allowing the binary to
+// report explicit setup failures to CI and shell scripts.
+func RunWithExitCode(args []string) int {
+	if len(args) >= 3 && args[1] == "setup" && hasArg(args[2:], "--toolchain") {
+		cfg := config.LoadConfig()
+		return runToolchainSetupCode(cfg, args[2:], os.Stdout, os.Stderr)
+	}
+	Run(args)
+	return 0
+}
+
 func printHelp() {
-	fmt.Println("Tusk Native Engine (v0.1)")
+	fmt.Println("Tusk Engine (v0.1)")
 	fmt.Println("\nUsage:")
 	fmt.Println("  tusk start [worker-file]  Start the Application Server")
 	fmt.Println("  tusk dev [worker-file]    Start in development mode (alias for start)")
 	fmt.Println("  tusk setup                Verify and setup environment")
+	fmt.Println("  tusk setup --toolchain    Provision an explicit verified toolchain")
+	fmt.Println("  tusk doctor [--json]      Diagnose PHP, Composer, and RoadRunner")
+	fmt.Println("  tusk toolchain list       Show the resolved project toolchain")
+	fmt.Println("  tusk toolchain pin X@V    Pin a tool version in .tusk/toolchain.json")
 	fmt.Println("  tusk init                 Initialize a new tusk.json file")
 	fmt.Println("\nPackage Management:")
 	fmt.Println("  tusk install              Install PHP dependencies")
@@ -126,21 +151,154 @@ func printHelp() {
 
 func runSetup(cfg *config.Config) {
 	fmt.Println("--- Tusk Environment Setup ---")
+	runDoctor(cfg, nil)
+}
 
-	// 1. Check PHP
-	mgr, err := php.NewManager(cfg.PhpBinary)
-	if err != nil {
-		fmt.Printf("PHP Error: %v\n", err)
-		fmt.Println("Tip: Install PHP or set 'php_binary' in tusk.json")
-	} else {
-		fmt.Printf("PHP Found: %s\n", mgr.BinaryPath)
+func runToolchainSetup(cfg *config.Config) {
+	if err := runToolchainSetupTo(cfg, nil, os.Stdout); err != nil {
+		log.Printf("Toolchain setup failed: %v", err)
+	}
+}
+
+func runToolchainCommand(cfg *config.Config, args []string) {
+	if err := runToolchainCommandTo(cfg, args, os.Stdout, defaultDiagnose); err != nil {
+		log.Printf("Toolchain command failed: %v", err)
+	}
+}
+
+type diagnoseFunc func(*config.Config) (toolchain.Report, error)
+
+func runToolchainCommandTo(cfg *config.Config, args []string, output io.Writer, diagnose diagnoseFunc) error {
+	if len(args) == 0 || args[0] == "list" {
+		return runDoctorToWith(cfg, args[1:], output, diagnose)
+	}
+	if args[0] != "pin" || len(args) != 2 {
+		return fmt.Errorf("usage: tusk toolchain list [--json] | tusk toolchain pin <tool>@<version>")
 	}
 
-	// 2. Check Paths
-	cwd, _ := os.Getwd()
-	fmt.Printf("Project Root: %s\n", cwd)
+	name, version, err := toolchain.ParsePin(args[1])
+	if err != nil {
+		return err
+	}
+	if _, err := toolchain.Pin(cfg.ProjectRoot, name, version); err != nil {
+		return fmt.Errorf("failed to pin toolchain: %w", err)
+	}
+	_, err = fmt.Fprintf(output, "Pinned %s@%s in .tusk/toolchain.json\n", name, version)
+	return err
+}
 
-	fmt.Println("\nTusk is ready to go!")
+func hasArg(args []string, wanted string) bool {
+	for _, arg := range args {
+		if arg == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func runDoctor(cfg *config.Config, args []string) {
+	if err := runDoctorTo(cfg, args, os.Stdout); err != nil {
+		log.Printf("Toolchain diagnosis failed: %v", err)
+	}
+}
+
+func runDoctorTo(cfg *config.Config, args []string, output io.Writer) error {
+	return runDoctorToWith(cfg, args, output, defaultDiagnose)
+}
+
+func runDoctorToWith(cfg *config.Config, args []string, output io.Writer, diagnose diagnoseFunc) error {
+	jsonOutput, err := parseDoctorArgs(args)
+	if err != nil {
+		return err
+	}
+	report, err := diagnose(cfg)
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode toolchain report: %w", err)
+		}
+		_, err = fmt.Fprintln(output, string(data))
+		return err
+	}
+
+	_, _ = fmt.Fprintf(output, "Project Root: %s\n", report.ProjectRoot)
+	_, _ = fmt.Fprintf(output, "Manifest: %s\n\n", report.ManifestPath)
+	for _, tool := range report.Tools {
+		if tool.Available {
+			_, _ = fmt.Fprintf(output, "%-10s %-17s %s (%s)\n", tool.Name, tool.Status, tool.Path, tool.Source)
+			continue
+		}
+		_, _ = fmt.Fprintf(output, "%-10s %-17s %s\n", tool.Name, tool.Status, tool.Error)
+	}
+	if report.Ready {
+		_, err = fmt.Fprintln(output, "\nToolchain is ready.")
+	} else {
+		_, err = fmt.Fprintln(output, "\nToolchain is incomplete. Install the missing tools or add project-local paths to .tusk/toolchain.json.")
+	}
+	return err
+}
+
+func defaultDiagnose(cfg *config.Config) (toolchain.Report, error) {
+	return toolchain.Diagnose(toolchain.DiagnosticOptions{
+		Root: cfg.ProjectRoot,
+		Overrides: map[toolchain.ToolName]string{
+			toolchain.PHP: cfg.PhpBinary,
+		},
+	})
+}
+
+func parseDoctorArgs(args []string) (bool, error) {
+	jsonOutput := false
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOutput = true
+		default:
+			return false, fmt.Errorf("unknown doctor flag %q", arg)
+		}
+	}
+	return jsonOutput, nil
+}
+
+func parseToolchainSetupArgs(args []string) (toolchain.ProvisionOptions, error) {
+	options := toolchain.ProvisionOptions{}
+	for _, arg := range args {
+		switch arg {
+		case "--offline":
+			options.Offline = true
+		default:
+			return options, fmt.Errorf("unknown toolchain setup flag %q", arg)
+		}
+	}
+	return options, nil
+}
+
+func runToolchainSetupTo(cfg *config.Config, args []string, output io.Writer) error {
+	options, err := parseToolchainSetupArgs(args)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(output, "--- Tusk Toolchain Setup ---")
+	if options.Offline {
+		_, _ = fmt.Fprintln(output, "Offline mode enabled; network access is disabled.")
+	}
+	catalogPath := filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain.catalog.json")
+	if _, err := os.Stat(catalogPath); err != nil {
+		return fmt.Errorf("trusted catalog is not configured at %s; update the Engine catalog before provisioning", catalogPath)
+	}
+	return fmt.Errorf("trusted catalog loading is not available in this Engine build")
+}
+
+func runToolchainSetupCode(cfg *config.Config, args []string, output, errorsOutput io.Writer) int {
+	if err := runToolchainSetupTo(cfg, args, output); err != nil {
+		_, _ = fmt.Fprintln(errorsOutput, err)
+		return 1
+	}
+	return 0
 }
 
 func runServerWithConfig(cfg *config.Config) {

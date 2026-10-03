@@ -1,27 +1,29 @@
-# Tusk Native Engine
+# Tusk Engine
 
-The **Tusk Native Engine** is the high-performance, all-in-one application server for the Tusk Framework. It replaces `php-fpm` and `nginx` with a single, self-contained binary written in Go.
+The **Tusk Engine** is the Go control plane for the Tusk Framework and its RoadRunner runtime. It owns project configuration, RoadRunner lifecycle, readiness, diagnostics, and platform operations. RoadRunner owns HTTP, PHP workers, IPC, pooling, recycling, and request limits.
+
+The embedded native HTTP/NDJSON server is a frozen migration-era implementation detail. New deployments use RoadRunner; the native path is not a second supported platform architecture.
 
 ## Features
 
-- **High Performance**: Uses Go's `net/http` for event-driven networking and standard I/O pipes for communicating with PHP workers.
-- **Portable**: Can download and manage its own PHP runtime (Sidecar mode), requiring zero system dependencies.
-- **All-in-One Tool**: Like Bun for Node.js, tusk manages your entire PHP project with a unified CLI.
+- **Runtime Control**: Validates, starts, monitors, reloads, and stops RoadRunner without duplicating its worker pool.
+- **Portable**: Manages the configured RoadRunner/PHP process boundary across supported development and deployment environments.
+- **Unified CLI**: Provides project, lifecycle, diagnostics, and platform commands above the runtime.
 - **Dual Config Support**: Works with both `tusk.json` and standard `composer.json` - use whichever you prefer!
-- **Package Management**: Built-in commands to manage PHP dependencies without needing to invoke composer directly.
-- **Unified CLI**: The `tusk` binary handles server management, dependency management, and framework commands.
+- **Package Management**: Composer-backed convenience commands; Composer remains the dependency resolver and lockfile authority.
+- **Project CLI**: The `tusk` binary handles project management, dependency commands, diagnostics, and framework commands.
 - **Dynamic Config**: Automatically loads settings from `tusk.json` or `composer.json`.
-- **Process Management**: Automatically supervises PHP workers, restarting them if they crash.
+- **Process Management**: Supervises the RoadRunner process and reports runtime failures.
 
 ## Architecture
 
 ```mermaid
 graph TD
-    subgraph Engine ["Tusk Engine (Go)"]
-        Server["HTTP Server"] --> Pool["Worker Pool"]
+    subgraph Engine ["Tusk Engine (Go control plane)"]
+        Config["Config + lifecycle"] --> RR["RoadRunner child"]
     end
-    
-    Pool -- "stdin / stdout (NDJSON)" --> Worker["PHP Worker (Framework)"]
+
+    RR --> Worker["PHP Workers (Tusk Framework)"]
     
     style Engine fill:#f9f9f9,stroke:#333,stroke-width:1px
     style Worker fill:#fff,stroke:#333,stroke-width:1px
@@ -85,12 +87,37 @@ Create or edit `tusk.json` in your project root:
     "worker_command": "worker.php",
     "public_dir": "public",
     "timeout": 30,
+    "max_body_bytes": 10485760,
+    "max_upload_bytes": 10485760,
+    "max_upload_files": 20,
     "scripts": {
         "dev": "tusk start",
         "test": "phpunit"
     }
 }
 ```
+
+Requests above the configured body or upload limits are rejected with HTTP 413. Static files are served only from `public/`; path traversal attempts are rejected. Scripts from `tusk.json` override scripts with the same name from `composer.json`, while non-conflicting scripts are merged.
+
+### Toolchain diagnosis
+
+The Engine can inspect the exact PHP, Composer, and RoadRunner executables
+available to the project without changing the machine:
+
+```bash
+tusk doctor
+tusk doctor --json
+tusk toolchain list
+tusk toolchain pin php@8.3
+tusk setup --toolchain --offline
+```
+
+When `.tusk/toolchain.json` declares a relative executable path, the project
+binary takes precedence over `PATH`. The current slice records requirements
+and diagnoses the environment. The provisioning core supports verified cache
+and offline installation, while the official signed catalog is released with
+the Engine; no local unsigned catalog is accepted and no executable is
+silently replaced.
 
 **Or use composer.json** - tusk automatically reads scripts and configuration:
 ```json
@@ -109,7 +136,7 @@ Create or edit `tusk.json` in your project root:
 > [!NOTE]
 > If both `tusk.json` and `composer.json` exist, tusk.json takes priority but scripts from both are merged.
 
-### 3. Manage Dependencies
+### 3. Manage Dependencies with Composer
 ```bash
 # Install dependencies
 tusk install
@@ -143,9 +170,9 @@ tusk test
 > Use `tusk run <script>` for explicit script execution, or just `tusk <script>` as shorthand.
 > Both work the same way, but `tusk run` makes it clear you're running a script.
 
-### 5. Start the Server
+### 5. Start RoadRunner
 ```bash
-# Use default worker.php
+# Start the managed RoadRunner runtime
 tusk start
 
 # Or specify a custom worker file
@@ -153,48 +180,47 @@ tusk start custom-worker.php
 ```
 
 > [!TIP]
-> You can customize the worker file in two ways:
+> The engine's runtime manager generates or validates the RoadRunner command/configuration. You can customize the worker file in two ways:
 > 1. **Command-line**: `tusk start my-worker.php` (takes precedence)
 > 2. **Config file**: Set `"worker_command": "my-worker.php"` in `tusk.json`
 
-## Why Use Tusk Server Instead of php -S?
+## Why Use Tusk with RoadRunner?
 
-Tusk's built-in server is **much more powerful** than PHP's development server (`php -S`):
+Tusk's RoadRunner control plane preserves the persistent PHP model while giving the runtime a single owner for HTTP and worker supervision:
 
 ### ⚡ Performance & Features
-- **Stateful Workers**: Unlike `php -S` which creates a new process per request, tusk maintains a pool of long-running PHP workers
+- **Stateful Workers**: Unlike `php -S` which creates a new process per request, RoadRunner maintains a pool of long-running PHP workers
 - **State Management**: Workers keep state between requests - perfect for caching, connection pooling, and performance
-- **Auto-Restart**: Workers automatically restart if they crash
-- **Concurrent Requests**: Handle multiple requests simultaneously with a worker pool
-- **Production-Ready**: Same server for development and production
+- **Auto-Restart**: RoadRunner recycles workers according to its limits and supervision policy
+- **Concurrent Requests**: RoadRunner handles the worker pool and concurrency
+- **Production-Ready**: The same lifecycle contract is used in development and production
 
 ### 📝 Use Tusk Server in Scripts
-Replace `php -S localhost:8000` with `tusk start` or `tusk dev`:
+Use `tusk start` or `tusk dev` to launch the managed RoadRunner runtime:
 
 ```json
 {
   "scripts": {
-    "dev": "tusk start",        // ✅ Use tusk's powerful server
-    "old": "php -S localhost:8000"  // ❌ Don't use PHP's simple server
+    "dev": "tusk start"
   }
 }
 ```
 
-The `tusk dev` command is an alias for `tusk start` - both start the high-performance tusk server.
+The `tusk dev` command is an alias for `tusk start`.
 
-## All-in-One Package Management
+## Composer-backed Package Commands
 
-Tusk is designed to be like **Bun for PHP** - a comprehensive tool that manages your entire project:
+Tusk provides a unified CLI around the PHP runtime while keeping Composer as the source of truth for dependency resolution:
 
 ### 🔄 Automatic Config Detection
 - Reads from `tusk.json` (custom Tusk config)
 - Falls back to `composer.json` (standard PHP)
 - Merges scripts from both if both exist
 - Priority: `tusk.json` > `composer.json`
-- Supports full composer.json schema (keywords, authors, license, etc.)
+- Reads the Composer metadata and scripts needed by the engine without reimplementing Composer's dependency solver
 
-### 📦 Built-in Dependency Management
-No need to switch between `tusk` and `composer` commands:
+### 📦 Composer-backed Dependency Commands
+These convenience commands delegate dependency work to Composer; Composer must still be installed:
 
 ```bash
 tusk install              # Install all dependencies
@@ -226,16 +252,16 @@ Everything through one command:
 - Script execution: `tusk run <script>` or `tusk <script>`
 - Framework commands: `tusk make:controller` (proxied to PHP)
 
-### 📋 Composer Schema Support
-Tusk now supports the complete composer.json schema including:
+### 📋 Composer Integration
+Tusk reads the relevant `composer.json` fields, including:
 - Package metadata: name, description, version, type, keywords
 - Licensing: license, authors, homepage
-- Dependencies: require, require-dev, conflict, replace, provide, suggest
+- Dependencies for display/configuration: require, require-dev, conflict, replace, provide, suggest
 - Autoloading: autoload, autoload-dev (PSR-4, PSR-0, classmap, files)
 - Configuration: config, extra, bin, repositories
-- Scripts: Including array-style scripts with proper execution
+- Scripts, including array-style scripts with proper execution
 
-## Protocol (NDJSON)
-The engine communicates with PHP workers using Newline Delimited JSON. The engine acts as a reverse proxy, parsing static files, query strings, and multipart uploads securely.
-- **Request**: `{ "method": "GET", "url": "/", "query": {...}, "headers": {...}, "cookies": {...}, "body": "...", "parsedBody": {...}, "uploadedFiles": {...} }`
-- **Response**: `{ "status": 200, "headers": {...}, "body": "..." }`
+Dependency resolution and lockfile generation remain Composer responsibilities.
+
+## Runtime boundary
+RoadRunner owns the HTTP and PHP worker protocol. The Engine does not act as a reverse proxy or duplicate RoadRunner's pool. The legacy NDJSON implementation remains only for migration and is not the platform request path.
