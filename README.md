@@ -1,12 +1,12 @@
 # Tusk Native Engine
 
-The **Tusk Native Engine** is the high-performance, all-in-one application server for the Tusk Framework. It replaces `php-fpm` and `nginx` with a single, self-contained binary written in Go.
+The **Tusk Native Engine** is the optional native backend for the Tusk Framework: a high-performance application server and PHP worker supervisor written in Go. The framework's primary production runtime is RoadRunner; this engine remains available when a self-contained Tusk-owned HTTP/worker stack is preferred.
 
 ## Features
 
 - **High Performance**: Uses Go's `net/http` for event-driven networking and standard I/O pipes for communicating with PHP workers.
 - **Portable**: Runs with the configured PHP binary and can later grow a managed sidecar runtime without changing the worker protocol.
-- **All-in-One Tool**: Like Bun for Node.js, tusk manages your entire PHP project with a unified CLI.
+- **Standalone Backend**: Provides a Tusk-owned HTTP server, worker pool, and unified CLI when the native backend is selected.
 - **Dual Config Support**: Works with both `tusk.json` and standard `composer.json` - use whichever you prefer!
 - **Package Management**: Composer-backed convenience commands; Composer remains the dependency resolver and lockfile authority.
 - **Unified CLI**: The `tusk` binary handles server management, dependency management, and framework commands.
