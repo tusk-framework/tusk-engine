@@ -145,6 +145,11 @@ and offline installation, while the official signed catalog is released with
 the Engine; no local unsigned catalog is accepted and no executable is
 silently replaced.
 
+Release operators must follow the [official catalog release
+runbook](release/README.md) for payload review, environment-only signing,
+provenance, key rotation, and revocation. The checked-in payload is signing
+input only; it is not a trusted runtime catalog.
+
 **Or use composer.json** - tusk automatically reads scripts and configuration:
 ```json
 {

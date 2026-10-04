@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   goreleaser:
@@ -22,6 +24,42 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Validate official catalog release inputs
+        shell: bash
+        env:
+          TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}
+          TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}
+          TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+        run: |
+          test -s release/toolchain-catalog.payload.json
+          test -n "$TUSK_CATALOG_SIGNING_KEY_B64"
+          test -n "$TUSK_CATALOG_KEY_ID"
+          test -n "$TUSK_CATALOG_TRUST_ANCHORS_B64"
+
+      - name: Sign and verify official catalog
+        shell: bash
+        env:
+          TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}
+          TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}
+          TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+        run: |
+          go run ./cmd/tusk-catalog sign \
+            --payload release/toolchain-catalog.payload.json \
+            --catalog release/toolchain-catalog.json \
+            --provenance release/toolchain-catalog.provenance.json
+          go run ./cmd/tusk-catalog verify \
+            --catalog release/toolchain-catalog.json
+
+      - name: Attest signed catalog
+        uses: actions/attest@v4
+        with:
+          subject-path: release/toolchain-catalog.json
+
+      - name: Attest catalog provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: release/toolchain-catalog.provenance.json
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -30,3 +68,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
