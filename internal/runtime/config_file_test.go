@@ -55,3 +55,27 @@ func TestNewConfigFileWritesPrivateUniqueRuntimeFile(t *testing.T) {
 		t.Fatalf("second Cleanup() error = %v", err)
 	}
 }
+
+func TestConfigFileCleanupRefusesMutatedPath(t *testing.T) {
+	root := t.TempDir()
+	userConfig := filepath.Join(root, ".rr.yaml")
+	if err := os.WriteFile(userConfig, []byte("user config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generated, err := NewConfigFile(root, []byte("version: \"3\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generatedPath := generated.Path
+	generated.Path = userConfig
+	if err := generated.Cleanup(); err == nil {
+		t.Fatal("Cleanup() accepted a path outside the generated runtime file")
+	}
+	if _, err := os.Stat(userConfig); err != nil {
+		t.Fatalf("user .rr.yaml was removed: %v", err)
+	}
+	generated.Path = generatedPath
+	if err := generated.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() generated file: %v", err)
+	}
+}

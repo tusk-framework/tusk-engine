@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ConfigFile owns one Engine-generated RoadRunner configuration file.
 type ConfigFile struct {
 	Path      string
 	generated bool
+	directory string
 }
 
 // NewConfigFile writes projected configuration below the project-local
@@ -39,13 +41,16 @@ func NewConfigFile(root string, contents []byte) (*ConfigFile, error) {
 		_ = os.Remove(path)
 		return nil, fmt.Errorf("close generated RoadRunner config: %w", err)
 	}
-	return &ConfigFile{Path: path, generated: true}, nil
+	return &ConfigFile{Path: path, generated: true, directory: directory}, nil
 }
 
 // Cleanup removes only the generated file owned by this ConfigFile.
 func (f *ConfigFile) Cleanup() error {
 	if f == nil || !f.generated || f.Path == "" {
 		return nil
+	}
+	if filepath.Clean(filepath.Dir(f.Path)) != filepath.Clean(f.directory) || !strings.HasPrefix(filepath.Base(f.Path), "rr-") || filepath.Ext(f.Path) != ".yaml" {
+		return fmt.Errorf("refuse to remove non-generated RoadRunner config %q", f.Path)
 	}
 	if err := os.Remove(f.Path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove generated RoadRunner config: %w", err)
