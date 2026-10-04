@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestDockerImagePlacesDefaultWorkerInProjectRoot(t *testing.T) {
+func TestDockerImageRequiresProjectBootstrapAndGeneratedWorker(t *testing.T) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -19,7 +19,15 @@ func TestDockerImagePlacesDefaultWorkerInProjectRoot(t *testing.T) {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
 
-	if !strings.Contains(string(contents), "COPY worker.php /app/worker.php") {
-		t.Fatal("Dockerfile does not place worker.php at the engine's default project-root path")
+	dockerfile := string(contents)
+	for _, line := range strings.Split(dockerfile, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "COPY worker.php ") {
+			t.Error("Dockerfile must not install the Engine repository's legacy worker.php in the project")
+		}
+	}
+	for _, requirement := range []string{"bootstrap/app.php", ".tusk/runtime/worker.php", "tusk start"} {
+		if !strings.Contains(dockerfile, requirement) {
+			t.Errorf("Dockerfile must document %s for the mounted modern project", requirement)
+		}
 	}
 }

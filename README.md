@@ -9,10 +9,10 @@ The embedded native HTTP/NDJSON server is a frozen migration-era implementation 
 - **Runtime Control**: Validates, starts, monitors, reloads, and stops RoadRunner without duplicating its worker pool.
 - **Portable**: Manages the configured RoadRunner/PHP process boundary across supported development and deployment environments.
 - **Unified CLI**: Provides project, lifecycle, diagnostics, and platform commands above the runtime.
-- **Dual Config Support**: Works with both `tusk.json` and standard `composer.json` - use whichever you prefer!
+- **Configuration boundaries**: `tusk.json` sets platform options; `composer.json` owns dependencies and scripts; `config/*.php` holds application settings.
 - **Package Management**: Composer-backed convenience commands; Composer remains the dependency resolver and lockfile authority.
 - **Project CLI**: The `tusk` binary handles project management, dependency commands, diagnostics, and framework commands.
-- **Dynamic Config**: Automatically loads settings from `tusk.json` or `composer.json`.
+- **Project bootstrap**: Requires an application returned from `bootstrap/app.php`; the Engine generates the RoadRunner worker.
 - **Process Management**: Supervises the RoadRunner process and reports runtime failures.
 - **Control API**: Optional, versioned health, readiness, metadata, and Prometheus endpoints for local operations.
 - **Component model**: Activates versioned, replaceable service-invocation and resilience providers before serving traffic.
@@ -74,11 +74,17 @@ go build -o tusk ./cmd/tusk
 
 ### 1. Initialize Your Project
 ```bash
-# Create a new tusk.json file
+# Create a tusk.json file for platform settings
 tusk init
-
-# Or use your existing composer.json - tusk reads both!
 ```
+
+`tusk init` creates `tusk.json` only. Use a modern Tusk application skeleton,
+or add `bootstrap/app.php` and the application files before starting. The
+bootstrap must return a configured `Tusk\Foundation\Application`; it must not
+start a server. Install PHP dependencies with `composer install` or
+`tusk install`, and ensure PHP and RoadRunner are available. See the
+[project runtime guide](docs/guides/project-runtime.md) for file ownership and
+migration steps.
 
 ### 2. Configure (Optional)
 Create or edit `tusk.json` in your project root:
@@ -87,7 +93,6 @@ Create or edit `tusk.json` in your project root:
     "port": 8080,
     "worker_count": 4,
     "php_binary": "php",
-    "worker_command": "worker.php",
     "public_dir": "public",
     "timeout": 30,
     "max_body_bytes": 10485760,
@@ -167,7 +172,7 @@ input only; it is not a trusted runtime catalog.
 ```
 
 > [!NOTE]
-> If both `tusk.json` and `composer.json` exist, tusk.json takes priority but scripts from both are merged.
+> `tusk.json` controls Engine/platform settings; `composer.json` controls dependencies and lockfiles. Scripts from both are merged, with `tusk.json` winning name conflicts. Application configuration belongs under `config/*.php`; `config.php` is not a special runtime filename.
 
 ### Control API
 
@@ -256,19 +261,18 @@ tusk test
 
 ### 5. Start RoadRunner
 ```bash
-# Start the managed RoadRunner runtime
+# Run from the project root after installing dependencies
 tusk start
-
-# Or specify a custom worker file
-tusk start custom-worker.php
 ```
 
 > [!TIP]
-> The Engine generates a private RoadRunner configuration below `.tusk/runtime`, starts `rr serve`, waits for `/ready?plugin=http`, and shuts RoadRunner down gracefully. Status and RPC sockets are loopback-only by default. If RoadRunner is missing or fails readiness, `tusk start` exits with a diagnostic and never falls back to the legacy native server.
->
-> You can customize the worker file in two ways:
-> 1. **Command-line**: `tusk start my-worker.php` (takes precedence)
-> 2. **Config file**: Set `"worker_command": "my-worker.php"` in `tusk.json`
+> `tusk start` requires `bootstrap/app.php`. The Engine creates `.tusk/runtime/worker.php` and a private RoadRunner configuration, then starts `rr serve` with `php .tusk/runtime/worker.php`. It waits for `/ready?plugin=http` and shuts RoadRunner down gracefully. Status and RPC sockets are loopback-only by default. Missing RoadRunner or failed readiness is an error; there is no native fallback.
+
+A root `worker.php` is a legacy file, not a selected entrypoint. For an older
+project, move it out of the project root, create `bootstrap/app.php` from the
+modern skeleton, move application settings into `config/*.php`, run
+`composer install`, and then run `tusk start`. Review the application
+composition before starting. Automated migration guidance is forthcoming.
 
 ## Why Use Tusk with RoadRunner?
 
@@ -352,4 +356,10 @@ Tusk reads the relevant `composer.json` fields, including:
 Dependency resolution and lockfile generation remain Composer responsibilities.
 
 ## Runtime boundary
-RoadRunner owns the HTTP and PHP worker protocol. The Engine does not act as a reverse proxy or duplicate RoadRunner's pool. The legacy NDJSON implementation remains only for migration and is not the platform request path.
+RoadRunner owns HTTP, Goridge IPC, worker pooling, recycling, and process-level shutdown. The Engine supervises it and generates the worker inside the project's `.tusk` directory. The PHP application is created once per worker; request-scoped services are reset after each request. The legacy NDJSON implementation remains migration-era code and is not the platform request path.
+
+Generated worker publication and cleanup use strict ownership checks on
+Windows. Linux works on filesystems that support the required atomic
+publication; cleanup may preserve a quarantine artifact and report an error.
+Other Unix targets currently fail closed at worker generation, even if an
+Engine binary can be installed there.

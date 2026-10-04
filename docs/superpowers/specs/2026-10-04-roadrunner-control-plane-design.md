@@ -58,6 +58,15 @@ integration. The native implementation remains in the repository temporarily
 as migration-era code, but is no longer selected, started, or advertised as
 a parallel platform architecture.
 
+For a modern Tusk project, `tusk start` requires `bootstrap/app.php` to return
+a configured `Tusk\Foundation\Application`. The Engine creates
+`.tusk/runtime/worker.php` inside that project and projects the RoadRunner
+server command as `php .tusk/runtime/worker.php`. The generated worker loads
+Composer, requires the application bootstrap once per worker, and calls the
+application's RoadRunner worker entrypoint. Request-scoped services are reset
+after each request. A root `worker.php` is a legacy artifact; it is rejected,
+not selected implicitly. Positional custom-worker arguments are unsupported.
+
 ## Goals
 
 - Make the runtime manager the real owner of the RoadRunner child process.
@@ -201,6 +210,17 @@ The Engine writes generated configuration under .tusk/runtime using a unique
 0600 file and removes only files carrying its generated-runtime marker. A
 user-authored .rr.yaml is never overwritten or deleted.
 
+The Engine also publishes the generated worker at `.tusk/runtime/worker.php`
+without overwriting user-owned `bootstrap/`, `config/`, or `routes/` files.
+Worker publication and cleanup enforce strict ownership on Windows. Linux is
+supported where its filesystem provides the required atomic publication;
+cleanup can leave a preserved quarantine artifact and return an error rather
+than delete a file whose ownership changed. Other Unix targets fail closed
+before publishing the worker. `tusk.json` owns platform settings,
+`config/*.php` owns application settings, `composer.json` owns dependencies,
+and `public/index.php` delegates HTTP requests to the application for
+conventional tooling. `config.php` has no special runtime meaning.
+
 RoadRunner executable selection follows this order:
 
 1. project-local path declared in .tusk/toolchain.json;
@@ -272,6 +292,11 @@ all describe RoadRunner as the runtime.
 
 The native packages remain isolated until a separate cleanup issue removes
 them after downstream migration confidence is established.
+
+Legacy projects must move the root worker aside, provide a modern
+`bootstrap/app.php` and application configuration, install Composer
+dependencies, and then run `tusk start`. An automated migration command is
+planned separately and is not part of this rollout.
 
 ## Follow-ups
 

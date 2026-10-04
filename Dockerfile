@@ -40,15 +40,10 @@ RUN ln -sf /usr/bin/php82 /usr/bin/php
 # Copy Engine Binary
 COPY --from=builder /app/tusk /usr/local/bin/tusk
 
-# Copy Worker Script (if part of the release, or it might be mounted)
-# For the engine image itself, we might just provide the engine.
-# But for a usable image, we probably want the worker.php too.
-# Let's assume the user mounts their code to /app.
-# But the engine needs its internal worker.php? No, the engine spawns the USER's worker.php?
-# Wait, the engine spawns `worker.php` which is the bridge.
-# The bridge `worker.php` is currently in the root of the repo.
-# We should probably compile/embed it or copy it.
-COPY worker.php /app/worker.php
+# Mount a modern application project at /app before running tusk start.
+# The project supplies bootstrap/app.php; the Engine creates
+# .tusk/runtime/worker.php there and RoadRunner runs it through PHP.
+# This Engine image does not install a repository-owned project worker.
 
 # Create a default tusk.json
 RUN echo '{"port": 8080, "worker_count": 4, "address": "0.0.0.0", "project_root": "/app"}' > /etc/tusk.json
