@@ -36,6 +36,14 @@ func TestDefaultConfigUsesDisabledLoopbackControl(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigUsesLoopbackPrometheusEndpoint(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Runtime.MetricsAddress != "127.0.0.1:2112" {
+		t.Fatalf("metrics address = %q, want 127.0.0.1:2112", cfg.Runtime.MetricsAddress)
+	}
+}
+
 func TestDefaultConfigUsesLoopbackRuntimeDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -62,6 +70,7 @@ func TestRuntimeConfigValidationRejectsUnsafeAddressesAndTimings(t *testing.T) {
 	}{
 		{name: "remote status", mutate: func(c *RuntimeConfig) { c.StatusAddress = "0.0.0.0:2114" }, want: "status address"},
 		{name: "remote rpc", mutate: func(c *RuntimeConfig) { c.RPCAddress = "tcp://example.test:6001" }, want: "RPC address"},
+		{name: "remote metrics", mutate: func(c *RuntimeConfig) { c.MetricsAddress = "0.0.0.0:2112" }, want: "metrics address"},
 		{name: "malformed status", mutate: func(c *RuntimeConfig) { c.StatusAddress = "not-an-address" }, want: "status address"},
 		{name: "malformed rpc", mutate: func(c *RuntimeConfig) { c.RPCAddress = "http://127.0.0.1:6001" }, want: "RPC address"},
 		{name: "zero timeout", mutate: func(c *RuntimeConfig) { c.StartupTimeout = 0 }, want: "startup timeout"},
@@ -142,6 +151,39 @@ func TestControlConfigValidation(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestControlConfigValidationRejectsUnsafeMetricsPath(t *testing.T) {
+	for _, path := range []string{"metrics", "/v1/metrics?token=secret", "/v1/healthz"} {
+		cfg := ControlConfig{Enabled: true, Address: "127.0.0.1", Port: 9091, MetricsPath: path}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "metrics path") {
+			t.Fatalf("Validate(%q) error = %v, want metrics path error", path, err)
+		}
+	}
+}
+
+func TestLoadConfigMergesControlAndMetricsSettings(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{
+  "control": {
+    "enabled": true,
+    "port": 9191
+  },
+  "runtime": {
+    "metrics_address": "127.0.0.1:9211"
+  }
+}`)
+
+	cfg, err := loadConfigFromDir(root)
+	if err != nil {
+		t.Fatalf("loadConfigFromDir() error = %v", err)
+	}
+	if !cfg.Control.Enabled || cfg.Control.Port != 9191 {
+		t.Fatalf("control settings were not loaded: %+v", cfg.Control)
+	}
+	if cfg.Runtime.MetricsAddress != "127.0.0.1:9211" {
+		t.Fatalf("metrics settings were not loaded: %+v", cfg.Runtime)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tusk-framework/tusk-engine/internal/metrics"
 )
 
 func TestManagerTracksRoadRunnerLifecycle(t *testing.T) {
@@ -17,6 +19,10 @@ func TestManagerTracksRoadRunnerLifecycle(t *testing.T) {
 	}
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
+	}
+	starts := gatheredCounter(t, "tusk_roadrunner_starts_total")
+	if starts < 1 {
+		t.Fatalf("RoadRunnerStarts = %v, want at least one start", starts)
 	}
 	if got := manager.State(); got != StateStarting {
 		t.Fatalf("state after Start = %s, want %s", got, StateStarting)
@@ -32,6 +38,9 @@ func TestManagerTracksRoadRunnerLifecycle(t *testing.T) {
 	}
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
+	}
+	if got := gatheredCounter(t, "tusk_roadrunner_stops_total"); got < 1 {
+		t.Fatalf("RoadRunnerStops = %v, want at least one stop", got)
 	}
 	process.exit(nil)
 	if got := manager.State(); got != StateStopped {
@@ -74,6 +83,9 @@ func TestManagerMarksUnexpectedProcessExitAsFailed(t *testing.T) {
 	if manager.State() != StateFailed {
 		t.Fatalf("state = %s, want failed", manager.State())
 	}
+	if got := gatheredCounter(t, "tusk_roadrunner_crashes_total"); got < 1 {
+		t.Fatalf("RoadRunnerCrashes = %v, want at least one crash", got)
+	}
 	if got := manager.Snapshot().LastErrorCategory; got != "process_failed" {
 		t.Fatalf("error category = %q, want process_failed", got)
 	}
@@ -113,6 +125,9 @@ func TestManagerWaitReadyTimesOutWithStableCategory(t *testing.T) {
 	}
 	if manager.State() != StateFailed || manager.Snapshot().LastErrorCategory != "timeout" {
 		t.Fatalf("snapshot = %+v, want failed timeout", manager.Snapshot())
+	}
+	if got := gatheredCounter(t, "tusk_roadrunner_readiness_timeouts_total"); got < 1 {
+		t.Fatalf("RoadRunnerReadinessTimeouts = %v, want at least one timeout", got)
 	}
 }
 
@@ -181,6 +196,20 @@ func (p *fakeProcess) exit(err error) {
 type sequenceProbe struct {
 	errors []error
 	index  int
+}
+
+func gatheredCounter(t *testing.T, name string) float64 {
+	t.Helper()
+	families, err := metrics.Registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() == name && len(family.Metric) > 0 {
+			return family.Metric[0].GetCounter().GetValue()
+		}
+	}
+	return 0
 }
 
 func (p *sequenceProbe) Check(context.Context) error {

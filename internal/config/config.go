@@ -59,16 +59,18 @@ type Config struct {
 
 // ControlConfig configures the local control-plane HTTP server.
 type ControlConfig struct {
-	Enabled bool   `json:"enabled"`
-	Address string `json:"address"`
-	Port    int    `json:"port"`
-	Token   string `json:"token"`
+	Enabled     bool   `json:"enabled"`
+	Address     string `json:"address"`
+	Port        int    `json:"port"`
+	Token       string `json:"token"`
+	MetricsPath string `json:"metrics_path"`
 }
 
 // RuntimeConfig configures the Engine-managed RoadRunner lifecycle.
 type RuntimeConfig struct {
 	StatusAddress  string        `json:"status_address"`
 	RPCAddress     string        `json:"rpc_address"`
+	MetricsAddress string        `json:"metrics_address"`
 	StartupTimeout time.Duration `json:"startup_timeout"`
 	ProbeInterval  time.Duration `json:"probe_interval"`
 }
@@ -76,6 +78,7 @@ type RuntimeConfig struct {
 const (
 	defaultRuntimeStatusAddress = "127.0.0.1:2114"
 	defaultRuntimeRPCAddress    = "tcp://127.0.0.1:6001"
+	defaultRuntimeMetrics       = "127.0.0.1:2112"
 	defaultRuntimeStartup       = 30 * time.Second
 	defaultRuntimeProbeInterval = 250 * time.Millisecond
 	maxRuntimeStartup           = 5 * time.Minute
@@ -88,6 +91,9 @@ func (c RuntimeConfig) Validate() error {
 		return err
 	}
 	if err := validateLoopbackTCPAddress("RPC address", c.RPCAddress, true); err != nil {
+		return err
+	}
+	if err := validateLoopbackTCPAddress("metrics address", c.MetricsAddress, false); err != nil {
 		return err
 	}
 	if c.StartupTimeout <= 0 || c.StartupTimeout > maxRuntimeStartup {
@@ -131,6 +137,9 @@ func (c ControlConfig) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("control port must be between 1 and 65535")
 	}
+	if err := validateMetricsPath(c.MetricsPath); err != nil {
+		return err
+	}
 
 	address := strings.TrimSpace(c.Address)
 	if address == "" {
@@ -141,6 +150,25 @@ func (c ControlConfig) Validate() error {
 		return fmt.Errorf("control token is required for non-loopback address %q", address)
 	}
 
+	return nil
+}
+
+func validateMetricsPath(path string) error {
+	if path == "" {
+		path = "/v1/metrics"
+	}
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return fmt.Errorf("metrics path must be an absolute HTTP path")
+	}
+	parsed, err := url.ParseRequestURI(path)
+	if err != nil || parsed.Path != path || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("metrics path must not contain a query or fragment")
+	}
+	for _, reserved := range []string{"/v1/healthz", "/v1/readyz", "/v1/metadata"} {
+		if path == reserved {
+			return fmt.Errorf("metrics path %q conflicts with a control endpoint", path)
+		}
+	}
 	return nil
 }
 
@@ -203,6 +231,7 @@ func DefaultConfig() *Config {
 		Runtime: RuntimeConfig{
 			StatusAddress:  defaultRuntimeStatusAddress,
 			RPCAddress:     defaultRuntimeRPCAddress,
+			MetricsAddress: defaultRuntimeMetrics,
 			StartupTimeout: defaultRuntimeStartup,
 			ProbeInterval:  defaultRuntimeProbeInterval,
 		},
@@ -274,6 +303,9 @@ func loadConfigFromDir(root string) (*Config, error) {
 	}
 
 	mergeConfig(cfg, overlay)
+	if _, present := raw["control"]; present {
+		cfg.Control = overlay.Control
+	}
 	cfg.Scripts = mergeScripts(composerScripts, overlay.Scripts)
 
 	if cfg.ProjectRoot == "" || cfg.ProjectRoot == "." || cfg.ProjectRoot == "./" {
@@ -329,6 +361,9 @@ func mergeConfig(dst, overlay *Config) {
 	}
 	if overlay.Runtime.RPCAddress != "" {
 		dst.Runtime.RPCAddress = overlay.Runtime.RPCAddress
+	}
+	if overlay.Runtime.MetricsAddress != "" {
+		dst.Runtime.MetricsAddress = overlay.Runtime.MetricsAddress
 	}
 	if overlay.Runtime.StartupTimeout != 0 {
 		dst.Runtime.StartupTimeout = overlay.Runtime.StartupTimeout

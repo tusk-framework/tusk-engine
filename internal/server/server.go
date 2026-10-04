@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +53,19 @@ func (s *Server) Stop(ctx context.Context) error {
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
+	measured := &metricsResponseWriter{ResponseWriter: w}
+	w = measured
+	started := time.Now()
+	metrics.WorkersActive.Inc()
+	defer func() {
+		metrics.WorkersActive.Dec()
+		status := measured.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		metrics.ObserveRequest(r.Method, status, time.Since(started))
+	}()
+
 	// 1. Static file check
 	if r.URL.Path != "/" {
 		publicPath, safe := safePublicPath(s.cfg.ProjectRoot, s.cfg.PublicDir, r.URL.Path)
@@ -212,15 +224,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. Forward to worker
-	start := time.Now()
-	metrics.WorkersActive.Inc()
-	defer metrics.WorkersActive.Dec()
-
 	resp, err := s.pool.HandleRequest(req)
 	defer r.Body.Close()
 
-	duration := time.Since(start).Seconds()
-	metrics.RequestDuration.WithLabelValues(r.Method).Observe(duration)
 	if err != nil {
 		fmt.Printf("Engine Relay Error: %v\n", err)
 		http.Error(w, fmt.Sprintf("Engine Error: %v", err), http.StatusBadGateway)
@@ -250,7 +256,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(status)
 
-	metrics.RequestsTotal.WithLabelValues(r.Method, strconv.Itoa(status)).Inc()
+	duration := time.Since(started).Seconds()
 
 	// 5. Log Request
 	fmt.Printf("[%s] %s %s - %d (%.3fs)\n", time.Now().Format("2006-01-02 15:04:05"), r.Method, r.URL.Path, status, duration)
@@ -261,4 +267,24 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Write([]byte("Invalid response body from worker"))
 	}
+}
+
+type metricsResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *metricsResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *metricsResponseWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
 }

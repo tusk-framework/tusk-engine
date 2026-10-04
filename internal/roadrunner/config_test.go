@@ -43,6 +43,40 @@ func TestProjectProducesDeterministicRoadRunnerConfig(t *testing.T) {
 	}
 }
 
+func TestProjectEnablesLoopbackPrometheusMetrics(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Runtime.MetricsAddress = "127.0.0.1:9211"
+
+	projected, err := Project(cfg)
+	if err != nil {
+		t.Fatalf("Project() error = %v", err)
+	}
+	contents := string(projected)
+	for _, expected := range []string{
+		"middleware:",
+		"- http_metrics",
+		"metrics:",
+		"address: 127.0.0.1:9211",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("rendered config missing %q:\n%s", expected, contents)
+		}
+	}
+}
+
+func TestProjectUsesSafeMetricsDefaults(t *testing.T) {
+	projected, err := Project(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("Project() error = %v", err)
+	}
+	contents := string(projected)
+	for _, expected := range []string{"http_metrics", "address: 127.0.0.1:2112"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("safe metrics default missing %q:\n%s", expected, contents)
+		}
+	}
+}
+
 func TestProjectRejectsRemoteRuntimeControlEndpoints(t *testing.T) {
 	for _, mutate := range []func(*config.Config){
 		func(cfg *config.Config) { cfg.Runtime.StatusAddress = "0.0.0.0:2114" },

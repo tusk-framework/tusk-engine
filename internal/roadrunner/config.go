@@ -9,12 +9,13 @@ import (
 )
 
 type fileConfig struct {
-	Version string       `yaml:"version"`
-	Server  serverConfig `yaml:"server"`
-	HTTP    httpConfig   `yaml:"http"`
-	Status  statusConfig `yaml:"status"`
-	RPC     rpcConfig    `yaml:"rpc"`
-	Logs    logsConfig   `yaml:"logs"`
+	Version string         `yaml:"version"`
+	Server  serverConfig   `yaml:"server"`
+	HTTP    httpConfig     `yaml:"http"`
+	Status  statusConfig   `yaml:"status"`
+	RPC     rpcConfig      `yaml:"rpc"`
+	Logs    logsConfig     `yaml:"logs"`
+	Metrics *metricsConfig `yaml:"metrics,omitempty"`
 }
 
 type serverConfig struct {
@@ -25,6 +26,7 @@ type serverConfig struct {
 type httpConfig struct {
 	Address        string     `yaml:"address"`
 	MaxRequestSize int64      `yaml:"max_request_size"`
+	Middleware     []string   `yaml:"middleware,omitempty"`
 	Pool           poolConfig `yaml:"pool"`
 }
 
@@ -52,6 +54,10 @@ type statusConfig struct {
 
 type rpcConfig struct {
 	Listen string `yaml:"listen"`
+}
+
+type metricsConfig struct {
+	Address string `yaml:"address"`
 }
 
 // Project renders the canonical Tusk configuration as a RoadRunner v3 file.
@@ -93,6 +99,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 		HTTP: httpConfig{
 			Address:        fmt.Sprintf("%s:%d", address, cfg.Port),
 			MaxRequestSize: (cfg.MaxBodyBytes + 1024*1024 - 1) / (1024 * 1024),
+			Middleware:     []string{"http_metrics"},
 			Pool: poolConfig{
 				NumWorkers:   cfg.WorkerCount,
 				MaxJobs:      1000,
@@ -111,6 +118,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 			Level: "warn",
 		},
 	}
+	projected.Metrics = &metricsConfig{Address: cfg.Runtime.MetricsAddress}
 
 	return yaml.Marshal(projected)
 }

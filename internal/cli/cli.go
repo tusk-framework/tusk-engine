@@ -17,6 +17,7 @@ import (
 
 	"github.com/tusk-framework/tusk-engine/internal/config"
 	"github.com/tusk-framework/tusk-engine/internal/control"
+	"github.com/tusk-framework/tusk-engine/internal/metrics"
 	"github.com/tusk-framework/tusk-engine/internal/php"
 	"github.com/tusk-framework/tusk-engine/internal/roadrunner"
 	engineRuntime "github.com/tusk-framework/tusk-engine/internal/runtime"
@@ -337,6 +338,7 @@ func runServerWithConfig(cfg *config.Config) error {
 			DesiredWorkers: cfg.WorkerCount,
 		},
 	)
+	metricsHandler := metrics.NewHandler("http://" + cfg.Runtime.MetricsAddress + "/metrics")
 	controlServer, err := control.NewServer(cfg.Control, manager, control.Metadata{
 		EngineName:     "tusk-engine",
 		Version:        "0.1.0",
@@ -346,7 +348,7 @@ func runServerWithConfig(cfg *config.Config) error {
 		WorkerCount:    cfg.WorkerCount,
 		TimeoutSeconds: cfg.Timeout,
 		Capabilities:   []string{"roadrunner", "persistent-workers", "metrics"},
-	})
+	}, metricsHandler)
 	if err != nil {
 		return fmt.Errorf("failed to initialize control server: %w", err)
 	}

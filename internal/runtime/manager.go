@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tusk-framework/tusk-engine/internal/control"
+	"github.com/tusk-framework/tusk-engine/internal/metrics"
 )
 
 var (
@@ -100,6 +101,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.process = process
 	m.startedAt = time.Now().UTC()
 	m.mu.Unlock()
+	metrics.RoadRunnerStarts.Inc()
 	go m.monitor(process)
 	return nil
 }
@@ -115,6 +117,7 @@ func (m *Manager) monitor(process Process) {
 	m.stateChangedAt = time.Now().UTC()
 	m.lastError = err
 	m.lastErrorCategory = "process_failed"
+	metrics.RoadRunnerCrashes.Inc()
 }
 
 func (m *Manager) MarkReady() error {
@@ -153,6 +156,7 @@ func (m *Manager) WaitReady(ctx context.Context, probe ReadinessProbe, interval 
 				<-timer.C
 			}
 			m.fail(ctx.Err(), "timeout")
+			metrics.RoadRunnerReadinessTimeouts.Inc()
 			return fmt.Errorf("%w: %v", ErrReadinessTimeout, ctx.Err())
 		}
 	}
@@ -208,6 +212,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 	if process == nil {
 		m.markStopped()
+		metrics.RoadRunnerStops.Inc()
 		return nil
 	}
 	if err := process.GracefulStop(ctx); err != nil {
@@ -217,6 +222,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 		}
 	}
 	m.markStopped()
+	metrics.RoadRunnerStops.Inc()
 	return nil
 }
 
