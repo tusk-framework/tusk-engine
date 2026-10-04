@@ -46,11 +46,12 @@ func TestProjectProducesDeterministicRoadRunnerConfig(t *testing.T) {
 func TestProjectIgnoresLegacyWorkerCommand(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkerCommand = "worker.php"
+	cfg.PhpBinary = "custom-php"
 	projected, err := Project(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(projected), "command: php .tusk/runtime/worker.php") || strings.Contains(string(projected), "command: php worker.php") {
+	if !strings.Contains(string(projected), "command: php .tusk/runtime/worker.php") || strings.Contains(string(projected), "custom-php") {
 		t.Fatalf("legacy worker reached RoadRunner: %s", projected)
 	}
 }

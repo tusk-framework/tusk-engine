@@ -133,6 +133,39 @@ type observingFactory struct {
 	check   func(engineRuntime.ProcessSpec) error
 }
 
+type stopFailureProcess struct {
+	waitCh chan error
+}
+
+func (p *stopFailureProcess) GracefulStop(context.Context) error {
+	return errors.New("graceful stop failed")
+}
+func (p *stopFailureProcess) Kill() error   { return errors.New("kill failed") }
+func (p *stopFailureProcess) Reload() error { return nil }
+func (p *stopFailureProcess) Wait() error   { return <-p.waitCh }
+
+func TestStopManagedRuntimeBlocksCleanupWhenRoadRunnerStopFails(t *testing.T) {
+	process := &stopFailureProcess{waitCh: make(chan error, 1)}
+	manager := engineRuntime.NewManager(&fakeProcessFactory{process: process}, engineRuntime.ProcessSpec{Binary: "rr-test"})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkReady(); err != nil {
+		t.Fatal(err)
+	}
+	cleanupAllowed, err := stopManagedRuntime(manager, func(context.Context) error { return nil })
+	process.waitCh <- errors.New("stopped")
+	if cleanupAllowed || err == nil || !strings.Contains(err.Error(), "stop RoadRunner") {
+		t.Fatalf("cleanupAllowed = %t, stop error = %v", cleanupAllowed, err)
+	}
+}
+
+type fakeProcessFactory struct{ process engineRuntime.Process }
+
+func (f *fakeProcessFactory) Start(engineRuntime.ProcessSpec) (engineRuntime.Process, error) {
+	return f.process, nil
+}
+
 func (f *observingFactory) Start(spec engineRuntime.ProcessSpec) (engineRuntime.Process, error) {
 	f.started = true
 	if f.check != nil {
@@ -146,7 +179,8 @@ func (f *observingFactory) Start(spec engineRuntime.ProcessSpec) (engineRuntime.
 func TestStartUsesGeneratedWorkerUntilProcessStops(t *testing.T) {
 	root := t.TempDir()
 	writeValidBootstrap(t, root)
-	if err := os.WriteFile(filepath.Join(root, "worker.php"), []byte("legacy user worker"), 0o600); err != nil {
+	userWorkerPath := filepath.Join(root, "user-worker.php")
+	if err := os.WriteFile(userWorkerPath, []byte("legacy user worker"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.DefaultConfig()
@@ -178,7 +212,7 @@ func TestStartUsesGeneratedWorkerUntilProcessStops(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".tusk", "runtime", "worker.php")); !os.IsNotExist(err) {
 		t.Fatalf("generated worker remains after RoadRunner stop: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(root, "worker.php"))
+	data, err := os.ReadFile(userWorkerPath)
 	if err != nil || string(data) != "legacy user worker" {
 		t.Fatalf("legacy worker changed: %q, %v", data, err)
 	}

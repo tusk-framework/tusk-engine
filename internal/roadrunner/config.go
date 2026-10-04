@@ -81,7 +81,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 		return nil, err
 	}
 
-	command := strings.TrimSpace(cfg.PhpBinary) + " .tusk/runtime/worker.php"
+	command := "php .tusk/runtime/worker.php"
 	address := strings.TrimSpace(cfg.Address)
 	if address == "" {
 		address = "127.0.0.1"
