@@ -9,15 +9,18 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/tusk-framework/tusk-engine/internal/components"
 )
 
 // Config holds the Tusk Engine configuration
 type Config struct {
 	// Server configuration
-	Port    int           `json:"port"`
-	Address string        `json:"address"`
-	Control ControlConfig `json:"control"`
-	Runtime RuntimeConfig `json:"runtime"`
+	Port       int                                 `json:"port"`
+	Address    string                              `json:"address"`
+	Control    ControlConfig                       `json:"control"`
+	Runtime    RuntimeConfig                       `json:"runtime"`
+	Components map[string]components.Configuration `json:"components,omitempty"`
 
 	// Worker configuration
 	WorkerCount    int               `json:"worker_count"`
@@ -370,6 +373,40 @@ func mergeConfig(dst, overlay *Config) {
 	}
 	if overlay.Runtime.ProbeInterval != 0 {
 		dst.Runtime.ProbeInterval = overlay.Runtime.ProbeInterval
+	}
+	if overlay.Components != nil {
+		dst.Components = cloneComponentConfigurations(overlay.Components)
+	}
+}
+
+func cloneComponentConfigurations(source map[string]components.Configuration) map[string]components.Configuration {
+	clone := make(map[string]components.Configuration, len(source))
+	for name, configuration := range source {
+		copyOf := make(components.Configuration, len(configuration))
+		for key, value := range configuration {
+			copyOf[key] = cloneComponentValue(value)
+		}
+		clone[name] = copyOf
+	}
+	return clone
+}
+
+func cloneComponentValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		copyOf := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			copyOf[key] = cloneComponentValue(nested)
+		}
+		return copyOf
+	case []any:
+		copyOf := make([]any, len(typed))
+		for index, nested := range typed {
+			copyOf[index] = cloneComponentValue(nested)
+		}
+		return copyOf
+	default:
+		return value
 	}
 }
 
