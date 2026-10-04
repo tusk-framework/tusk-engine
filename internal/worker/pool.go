@@ -86,11 +86,12 @@ func newPoolWithCommandFactory(cfg *config.Config, factory commandFactory) (*Poo
 		cancel:      cancel,
 		newCommand:  factory,
 		snapshot: control.RuntimeSnapshot{
-			EngineState:     control.EngineStarting,
-			ReadinessReason: control.ReadinessStarting,
-			DesiredWorkers:  cfg.WorkerCount,
-			StartedAt:       now,
-			StateChangedAt:  now,
+			EngineState:       control.EngineStarting,
+			ReadinessReason:   control.ReadinessStarting,
+			DesiredWorkers:    cfg.WorkerCount,
+			WorkerCountsKnown: true,
+			StartedAt:         now,
+			StateChangedAt:    now,
 		},
 	}, nil
 }
