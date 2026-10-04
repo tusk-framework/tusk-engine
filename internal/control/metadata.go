@@ -1,6 +1,10 @@
 package control
 
-import "runtime"
+import (
+	"runtime"
+
+	"github.com/tusk-framework/tusk-engine/internal/components"
+)
 
 type Metadata struct {
 	EngineName     string
@@ -12,14 +16,16 @@ type Metadata struct {
 	TimeoutSeconds int
 	Capabilities   []string
 	RemoteAccess   bool
+	Components     []components.Descriptor
 }
 
 type metadataResponse struct {
-	Version      string          `json:"version"`
-	Engine       metadataEngine  `json:"engine"`
-	Runtime      metadataRuntime `json:"runtime"`
-	Capabilities []string        `json:"capabilities"`
-	Control      metadataControl `json:"control"`
+	Version      string                  `json:"version"`
+	Engine       metadataEngine          `json:"engine"`
+	Runtime      metadataRuntime         `json:"runtime"`
+	Capabilities []string                `json:"capabilities"`
+	Control      metadataControl         `json:"control"`
+	Components   []components.Descriptor `json:"components,omitempty"`
 }
 
 type metadataEngine struct {
@@ -41,6 +47,17 @@ type metadataControl struct {
 
 func (m Metadata) safeResponse(remoteAccess bool) metadataResponse {
 	capabilities := append([]string(nil), m.Capabilities...)
+	descriptors := make([]components.Descriptor, 0, len(m.Components))
+	for _, descriptor := range m.Components {
+		copyOf := descriptor
+		copyOf.Capabilities = append([]components.Capability(nil), descriptor.Capabilities...)
+		copyOf.SecretFields = append([]string(nil), descriptor.SecretFields...)
+		copyOf.Schema.Fields = make(map[string]components.FieldSchema, len(descriptor.Schema.Fields))
+		for name, field := range descriptor.Schema.Fields {
+			copyOf.Schema.Fields[name] = field
+		}
+		descriptors = append(descriptors, copyOf)
+	}
 	goVersion := m.GoVersion
 	if goVersion == "" {
 		goVersion = runtime.Version()
@@ -63,5 +80,6 @@ func (m Metadata) safeResponse(remoteAccess bool) metadataResponse {
 		Control: metadataControl{
 			RemoteAccess: remoteAccess,
 		},
+		Components: descriptors,
 	}
 }
