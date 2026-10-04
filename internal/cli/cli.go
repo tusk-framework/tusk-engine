@@ -376,6 +376,7 @@ $completed = true;`
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, cfg.PhpBinary, "-r", phpCode)
+	command.WaitDelay = 250 * time.Millisecond
 	command.Dir = cfg.ProjectRoot
 	command.Env = append(os.Environ(), "TUSK_BOOTSTRAP_RESULT="+resultPath)
 	output, err := command.CombinedOutput()

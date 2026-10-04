@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,66 @@ func TestBootstrapValidationIsBounded(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("bootstrap validation took %s, want bounded subprocess", elapsed)
 	}
+}
+
+func TestBootstrapValidationDoesNotWaitForInheritedOutputAfterTimeout(t *testing.T) {
+	root := t.TempDir()
+	writeBootstrap(t, root, "<?php")
+	cfg := config.DefaultConfig()
+	cfg.ProjectRoot = root
+	cfg.PhpBinary = buildInheritedOutputHelper(t)
+	started := time.Now()
+	err := validateBootstrapWithTimeout(cfg, 50*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("inherited-output timeout error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("bootstrap validation waited %s for inherited output, want bounded wait", elapsed)
+	}
+}
+
+func buildInheritedOutputHelper(t *testing.T) string {
+	t.Helper()
+	directory := t.TempDir()
+	source := filepath.Join(directory, "helper.go")
+	binary := filepath.Join(directory, "bootstrap-helper")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	contents := `package main
+
+import (
+    "os"
+    "os/exec"
+    "time"
+)
+
+func main() {
+    if len(os.Args) > 1 && os.Args[1] == "--child" {
+        time.Sleep(3 * time.Second)
+        return
+    }
+    child := exec.Command(os.Args[0], "--child")
+    child.Stdin = os.Stdin
+    child.Stdout = os.Stdout
+    child.Stderr = os.Stderr
+    if err := child.Start(); err != nil {
+        os.Exit(2)
+    }
+    time.Sleep(10 * time.Second)
+}`
+	if err := os.WriteFile(source, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	goBinary, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("Go is unavailable for inherited-output helper")
+	}
+	command := exec.Command(goBinary, "build", "-o", binary, source)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build inherited-output helper: %v\n%s", err, output)
+	}
+	return binary
 }
 
 func TestStartRejectsPositionalWorkerWithoutUnavailableMigrationCommand(t *testing.T) {

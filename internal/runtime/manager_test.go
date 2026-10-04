@@ -142,6 +142,56 @@ func TestManagerMarksFailedWhenProcessCannotStart(t *testing.T) {
 	}
 }
 
+type killThenWaitProcess struct {
+	killed chan struct{}
+	waitCh chan error
+}
+
+func (p *killThenWaitProcess) GracefulStop(context.Context) error {
+	return errors.New("graceful stop failed")
+}
+func (p *killThenWaitProcess) Kill() error {
+	close(p.killed)
+	return nil
+}
+func (p *killThenWaitProcess) Reload() error { return nil }
+func (p *killThenWaitProcess) Wait() error   { return <-p.waitCh }
+
+func TestManagerWaitsForProcessExitAfterKill(t *testing.T) {
+	process := &killThenWaitProcess{killed: make(chan struct{}), waitCh: make(chan error, 1)}
+	manager := NewManager(&fakeFactory{process: process}, ProcessSpec{Binary: "rr"})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkReady(); err != nil {
+		t.Fatal(err)
+	}
+
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- manager.Stop(context.Background()) }()
+	select {
+	case <-process.killed:
+	case err := <-stopResult:
+		t.Fatalf("Stop() returned before process exit: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not request kill")
+	}
+	select {
+	case err := <-stopResult:
+		t.Fatalf("Stop() returned before Wait(): %v", err)
+	default:
+	}
+	process.waitCh <- nil
+	select {
+	case err := <-stopResult:
+		if err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not return after process exit")
+	}
+}
+
 type fakeFactory struct {
 	process Process
 	err     error
