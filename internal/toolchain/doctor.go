@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -30,6 +31,45 @@ const (
 	StatusVersionMismatch = "version-mismatch"
 )
 
+// Profile controls which tool sources are acceptable for a project.
+type Profile string
+
+const (
+	ProfileSystem       Profile = "system"
+	ProfileProjectLocal Profile = "project-local"
+	ProfileDocker       Profile = "docker"
+	ProfileCI           Profile = "ci"
+)
+
+// Platform identifies the target for a toolchain manifest and diagnostic.
+type Platform struct {
+	OS   string `json:"os,omitempty"`
+	Arch string `json:"arch,omitempty"`
+}
+
+// ProfilePolicy describes source and pin requirements for a profile.
+type ProfilePolicy struct {
+	AllowSystemFallback bool
+	RequirePins         bool
+	PreferProjectLocal  bool
+}
+
+// Policy returns the source policy for a supported profile.
+func (p Profile) Policy() ProfilePolicy {
+	switch p {
+	case ProfileProjectLocal:
+		return ProfilePolicy{AllowSystemFallback: true, PreferProjectLocal: true}
+	case ProfileDocker:
+		return ProfilePolicy{AllowSystemFallback: true}
+	case ProfileCI:
+		return ProfilePolicy{RequirePins: true, PreferProjectLocal: true}
+	case ProfileSystem, "":
+		return ProfilePolicy{AllowSystemFallback: true}
+	default:
+		return ProfilePolicy{}
+	}
+}
+
 // ToolSpec describes a project-local tool and its expected version.
 type ToolSpec struct {
 	Version string `json:"version,omitempty"`
@@ -38,9 +78,58 @@ type ToolSpec struct {
 
 // Manifest is stored in .tusk/toolchain.json.
 type Manifest struct {
+	Profile    Profile  `json:"profile,omitempty"`
+	Platform   Platform `json:"platform,omitempty"`
 	PHP        ToolSpec `json:"php,omitempty"`
 	Composer   ToolSpec `json:"composer,omitempty"`
 	RoadRunner ToolSpec `json:"roadrunner,omitempty"`
+}
+
+// EffectiveProfile returns the backwards-compatible default for manifests
+// created before profiles existed.
+func (m Manifest) EffectiveProfile() Profile {
+	if m.Profile == "" {
+		return ProfileSystem
+	}
+	return m.Profile
+}
+
+// Target resolves an incomplete manifest target against the current runtime.
+func (m Manifest) Target(defaultOS, defaultArch string) Platform {
+	if defaultOS == "" {
+		defaultOS = runtime.GOOS
+	}
+	if defaultArch == "" {
+		defaultArch = runtime.GOARCH
+	}
+	target := m.Platform
+	if target.OS == "" {
+		target.OS = defaultOS
+	}
+	if target.Arch == "" {
+		target.Arch = defaultArch
+	}
+	return target
+}
+
+// Validate checks the declarative part of the manifest without touching the
+// filesystem or accepting a binary.
+func (m Manifest) Validate() error {
+	profile := m.EffectiveProfile()
+	switch profile {
+	case ProfileSystem, ProfileProjectLocal, ProfileDocker, ProfileCI:
+	default:
+		return fmt.Errorf("toolchain profile %q is unsupported; use system, project-local, docker, or ci", profile)
+	}
+	for label, value := range map[string]string{
+		"platform OS":   m.Platform.OS,
+		"platform arch": m.Platform.Arch,
+	} {
+		if value != "" && (strings.ContainsAny(value, `/\\:`) || strings.ContainsAny(value, "\x00\r\n")) {
+			return fmt.Errorf("toolchain %s must be a safe path segment", label)
+		}
+	}
+	return nil
 }
 
 // Tool is the diagnostic result for one managed executable.
@@ -52,15 +141,18 @@ type Tool struct {
 	Source           string `json:"source,omitempty"`
 	Version          string `json:"version,omitempty"`
 	RequestedVersion string `json:"requested_version,omitempty"`
+	Verification     string `json:"verification,omitempty"`
 	Error            string `json:"error,omitempty"`
 }
 
 // Report is the complete toolchain diagnosis.
 type Report struct {
-	ProjectRoot  string `json:"project_root"`
-	ManifestPath string `json:"manifest_path"`
-	Tools        []Tool `json:"tools"`
-	Ready        bool   `json:"ready"`
+	ProjectRoot  string   `json:"project_root"`
+	ManifestPath string   `json:"manifest_path"`
+	Profile      string   `json:"profile"`
+	Platform     Platform `json:"platform"`
+	Tools        []Tool   `json:"tools"`
+	Ready        bool     `json:"ready"`
 }
 
 // Tool returns one tool from the report. It returns an empty result when the
@@ -79,6 +171,8 @@ func (r Report) Tool(name ToolName) Tool {
 type DiagnosticOptions struct {
 	Root      string
 	Manifest  Manifest
+	Profile   Profile
+	Platform  Platform
 	Overrides map[ToolName]string
 	Lookup    func(name string) (string, error)
 	Version   func(path string) (string, error)
@@ -180,6 +274,24 @@ func Diagnose(options DiagnosticOptions) (Report, error) {
 			return Report{}, err
 		}
 	}
+	if err := manifest.Validate(); err != nil {
+		return Report{}, err
+	}
+	profile := manifest.EffectiveProfile()
+	if options.Profile != "" {
+		profile = options.Profile
+	}
+	policy := profile.Policy()
+	target := manifest.Target(runtime.GOOS, runtime.GOARCH)
+	if options.Platform.OS != "" {
+		target.OS = options.Platform.OS
+	}
+	if options.Platform.Arch != "" {
+		target.Arch = options.Platform.Arch
+	}
+	if err := (Manifest{Profile: profile, Platform: target}).Validate(); err != nil {
+		return Report{}, err
+	}
 
 	lookup := options.Lookup
 	if lookup == nil {
@@ -199,7 +311,7 @@ func Diagnose(options DiagnosticOptions) (Report, error) {
 		{name: Composer, spec: manifest.Composer},
 		{name: RoadRunner, spec: manifest.RoadRunner},
 	} {
-		tools = append(tools, resolve(root, item.name, item.spec, options.Overrides[item.name], lookup, version))
+		tools = append(tools, resolve(root, item.name, item.spec, options.Overrides[item.name], lookup, version, profile, policy, target))
 	}
 
 	ready := true
@@ -210,7 +322,7 @@ func Diagnose(options DiagnosticOptions) (Report, error) {
 		}
 	}
 
-	return Report{ProjectRoot: root, ManifestPath: manifestPath, Tools: tools, Ready: ready}, nil
+	return Report{ProjectRoot: root, ManifestPath: manifestPath, Profile: string(profile), Platform: target, Tools: tools, Ready: ready}, nil
 }
 
 // ResolveExecutable resolves one tool for a project and returns a startup-safe
@@ -244,7 +356,7 @@ func ResolveExecutableWithOptions(root string, name ToolName, options Diagnostic
 	return tool, nil
 }
 
-func resolve(root string, name ToolName, spec ToolSpec, override string, lookup func(string) (string, error), version func(string) (string, error)) Tool {
+func resolve(root string, name ToolName, spec ToolSpec, override string, lookup func(string) (string, error), version func(string) (string, error), profile Profile, policy ProfilePolicy, target Platform) Tool {
 	tool := Tool{
 		Name:             string(name),
 		Status:           StatusMissing,
@@ -258,7 +370,16 @@ func resolve(root string, name ToolName, spec ToolSpec, override string, lookup 
 	if pathHint != "" {
 		path := pathHint
 		if !filepath.IsAbs(path) {
-			candidate := filepath.Join(root, path)
+			candidate, err := filepath.Abs(filepath.Join(root, path))
+			if err != nil {
+				tool.Error = fmt.Sprintf("resolve %s project path: %v", name, err)
+				return tool
+			}
+			relative, err := filepath.Rel(root, candidate)
+			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				tool.Error = fmt.Sprintf("%s project path %q escapes project root; use a path inside the project or an absolute managed path", name, pathHint)
+				return tool
+			}
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 			}
@@ -272,13 +393,21 @@ func resolve(root string, name ToolName, spec ToolSpec, override string, lookup 
 	}
 
 	if tool.Path == "" {
+		if policy.RequirePins && spec.Version == "" {
+			tool.Error = fmt.Sprintf("%s is unpinned in %s profile; run tusk toolchain pin %s@<version>", name, profile, name)
+			return tool
+		}
+		if !policy.AllowSystemFallback {
+			tool.Error = fmt.Sprintf("%s has no project-local executable for %s profile on %s/%s; run tusk setup --toolchain", name, profile, target.OS, target.Arch)
+			return tool
+		}
 		lookupName := executableName(name)
 		if override != "" && spec.Path == "" {
 			lookupName = override
 		}
 		path, err := lookup(lookupName)
 		if err != nil {
-			tool.Error = fmt.Sprintf("%s executable not found", name)
+			tool.Error = fmt.Sprintf("%s executable not found for %s profile on %s/%s; install it or run tusk setup --toolchain", name, profile, target.OS, target.Arch)
 			return tool
 		}
 		tool.Path = path

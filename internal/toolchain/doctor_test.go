@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -220,5 +221,56 @@ func TestParsePinRejectsUnknownToolsAndMalformedValues(t *testing.T) {
 	}
 	if name != RoadRunner || version != "2025.1" {
 		t.Fatalf("ParsePin() = %q, %q", name, version)
+	}
+}
+
+func TestManifestDefaultsToSystemProfileAndRuntimeTarget(t *testing.T) {
+	manifest := Manifest{}
+
+	if got := manifest.EffectiveProfile(); got != ProfileSystem {
+		t.Fatalf("EffectiveProfile() = %q, want %q", got, ProfileSystem)
+	}
+	target := manifest.Target(runtime.GOOS, runtime.GOARCH)
+	if target.OS != runtime.GOOS || target.Arch != runtime.GOARCH {
+		t.Fatalf("Target() = %#v, want runtime target", target)
+	}
+}
+
+func TestManifestValidatesProfilesAndTargets(t *testing.T) {
+	if err := (Manifest{Profile: Profile("workstation")}).Validate(); err == nil || !strings.Contains(err.Error(), "profile") {
+		t.Fatal("Validate() accepted unknown profile")
+	}
+	if err := (Manifest{Platform: Platform{OS: "linux/windows", Arch: "amd64"}}).Validate(); err == nil || !strings.Contains(err.Error(), "platform") {
+		t.Fatal("Validate() accepted unsafe platform")
+	}
+	if err := (Manifest{Profile: ProfileCI, PHP: ToolSpec{Version: "8.3"}}).Validate(); err != nil {
+		t.Fatalf("Validate() rejected valid CI manifest: %v", err)
+	}
+}
+
+func TestDiagnoseReportsProfileAndTarget(t *testing.T) {
+	report, err := Diagnose(DiagnosticOptions{
+		Root:     t.TempDir(),
+		Manifest: Manifest{Profile: ProfileCI, Platform: Platform{OS: "windows", Arch: "amd64"}},
+		Lookup: func(name string) (string, error) {
+			return "C:/tools/" + name + ".exe", nil
+		},
+		Version: func(string) (string, error) { return "tool 1.0", nil },
+	})
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	if report.Profile != string(ProfileCI) || report.Platform.OS != "windows" || report.Platform.Arch != "amd64" {
+		t.Fatalf("report profile/target = %q/%#v, want ci/windows-amd64", report.Profile, report.Platform)
+	}
+}
+
+func TestResolveRejectsProjectPathOutsideRoot(t *testing.T) {
+	_, err := ResolveExecutableWithOptions(t.TempDir(), RoadRunner, DiagnosticOptions{
+		Manifest: Manifest{RoadRunner: ToolSpec{Path: "../outside/rr"}},
+		Lookup:   func(string) (string, error) { return "", errors.New("not found") },
+	})
+	if err == nil || !strings.Contains(err.Error(), "project path") {
+		t.Fatalf("ResolveExecutableWithOptions() error = %v, want project path diagnostic", err)
 	}
 }
