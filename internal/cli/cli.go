@@ -305,6 +305,10 @@ func runToolchainSetupCode(cfg *config.Config, args []string, output, errorsOutp
 }
 
 func runServerWithConfig(cfg *config.Config) error {
+	if err := cfg.Control.Validate(); err != nil {
+		return fmt.Errorf("invalid control configuration: %w", err)
+	}
+
 	// Resolve the worker path for logging
 	workerPath := cfg.WorkerCommand
 	if !filepath.IsAbs(workerPath) {
@@ -336,11 +340,12 @@ func runServerWithConfig(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize control server: %w", err)
 	}
+	var controlErr <-chan error
 	if cfg.Control.Enabled {
+		controlError := make(chan error, 1)
+		controlErr = controlError
 		go func() {
-			if err := controlServer.Start(); err != nil {
-				log.Printf("Control server stopped: %v", err)
-			}
+			controlError <- controlServer.Start()
 		}()
 		readyContext, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
 		err := controlServer.WaitReady(readyContext)
@@ -378,9 +383,18 @@ func runServerWithConfig(cfg *config.Config) error {
 	case <-stop:
 	case err := <-serverErr:
 		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = srv.Stop(shutdownContext)
 		_ = controlServer.Stop(shutdownContext)
 		cancelShutdown()
 		return fmt.Errorf("traffic server failed: %w", err)
+	case err := <-controlErr:
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = srv.Stop(shutdownContext)
+		cancelShutdown()
+		if err == nil {
+			return fmt.Errorf("control server stopped unexpectedly")
+		}
+		return fmt.Errorf("control server failed: %w", err)
 	}
 	log.Println("Shutting down gracefully...")
 
