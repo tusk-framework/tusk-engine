@@ -74,9 +74,6 @@ func Project(cfg *config.Config) ([]byte, error) {
 	if cfg.MaxBodyBytes <= 0 {
 		return nil, fmt.Errorf("max_body_bytes must be positive")
 	}
-	if strings.TrimSpace(cfg.WorkerCommand) == "" {
-		return nil, fmt.Errorf("worker_command is required")
-	}
 	if strings.TrimSpace(cfg.PhpBinary) == "" {
 		return nil, fmt.Errorf("php_binary is required")
 	}
@@ -84,7 +81,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 		return nil, err
 	}
 
-	command := strings.TrimSpace(cfg.PhpBinary) + " " + strings.TrimSpace(cfg.WorkerCommand)
+	command := strings.TrimSpace(cfg.PhpBinary) + " .tusk/runtime/worker.php"
 	address := strings.TrimSpace(cfg.Address)
 	if address == "" {
 		address = "127.0.0.1"
