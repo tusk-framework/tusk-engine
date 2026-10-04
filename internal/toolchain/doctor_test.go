@@ -65,6 +65,52 @@ func TestDiagnosePrefersProjectToolsAndFallsBackToSystem(t *testing.T) {
 	}
 }
 
+func TestResolveExecutablePrefersProjectToolAndRejectsMissingOrMismatched(t *testing.T) {
+	root := t.TempDir()
+	projectRR := filepath.Join(root, ".tusk", "bin", "rr")
+	if err := os.MkdirAll(filepath.Dir(projectRR), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectRR, []byte("rr"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := Manifest{RoadRunner: ToolSpec{Path: ".tusk/bin/rr", Version: "2025"}}
+
+	tool, err := ResolveExecutableWithOptions(root, RoadRunner, DiagnosticOptions{
+		Manifest: manifest,
+		Lookup:   func(string) (string, error) { return "/system/rr", nil },
+		Version: func(path string) (string, error) {
+			if path == projectRR {
+				return "rr version 2025.1", nil
+			}
+			return "rr version 2024.1", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveExecutableWithOptions() error = %v", err)
+	}
+	if tool.Path != projectRR || tool.Source != SourceProject {
+		t.Fatalf("resolved RoadRunner = %#v, want project executable", tool)
+	}
+
+	_, err = ResolveExecutableWithOptions(root, RoadRunner, DiagnosticOptions{
+		Manifest: Manifest{RoadRunner: ToolSpec{Version: "2025"}},
+		Lookup:   func(string) (string, error) { return "", errors.New("missing") },
+		Version:  func(string) (string, error) { return "", nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "RoadRunner") {
+		t.Fatalf("missing RoadRunner error = %v", err)
+	}
+
+	_, err = ResolveExecutableWithOptions(root, RoadRunner, DiagnosticOptions{
+		Manifest: Manifest{RoadRunner: ToolSpec{Path: projectRR, Version: "2026"}},
+		Version:  func(string) (string, error) { return "rr version 2025.1", nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("version mismatch error = %v", err)
+	}
+}
+
 func TestDiagnoseMarksMissingAndVersionMismatch(t *testing.T) {
 	report, err := Diagnose(DiagnosticOptions{
 		Root: t.TempDir(),
