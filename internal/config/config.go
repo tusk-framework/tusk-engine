@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Config holds the Tusk Engine configuration
@@ -15,6 +17,7 @@ type Config struct {
 	Port    int           `json:"port"`
 	Address string        `json:"address"`
 	Control ControlConfig `json:"control"`
+	Runtime RuntimeConfig `json:"runtime"`
 
 	// Worker configuration
 	WorkerCount    int               `json:"worker_count"`
@@ -60,6 +63,63 @@ type ControlConfig struct {
 	Address string `json:"address"`
 	Port    int    `json:"port"`
 	Token   string `json:"token"`
+}
+
+// RuntimeConfig configures the Engine-managed RoadRunner lifecycle.
+type RuntimeConfig struct {
+	StatusAddress  string        `json:"status_address"`
+	RPCAddress     string        `json:"rpc_address"`
+	StartupTimeout time.Duration `json:"startup_timeout"`
+	ProbeInterval  time.Duration `json:"probe_interval"`
+}
+
+const (
+	defaultRuntimeStatusAddress = "127.0.0.1:2114"
+	defaultRuntimeRPCAddress    = "tcp://127.0.0.1:6001"
+	defaultRuntimeStartup       = 30 * time.Second
+	defaultRuntimeProbeInterval = 250 * time.Millisecond
+	maxRuntimeStartup           = 5 * time.Minute
+	maxRuntimeProbeInterval     = time.Minute
+)
+
+// Validate checks that runtime control endpoints are local and timings are bounded.
+func (c RuntimeConfig) Validate() error {
+	if err := validateLoopbackTCPAddress("status address", c.StatusAddress, false); err != nil {
+		return err
+	}
+	if err := validateLoopbackTCPAddress("RPC address", c.RPCAddress, true); err != nil {
+		return err
+	}
+	if c.StartupTimeout <= 0 || c.StartupTimeout > maxRuntimeStartup {
+		return fmt.Errorf("startup timeout must be between 1ns and %s", maxRuntimeStartup)
+	}
+	if c.ProbeInterval <= 0 || c.ProbeInterval > maxRuntimeProbeInterval {
+		return fmt.Errorf("probe interval must be between 1ns and %s", maxRuntimeProbeInterval)
+	}
+	return nil
+}
+
+func validateLoopbackTCPAddress(label, value string, urlForm bool) error {
+	address := strings.TrimSpace(value)
+	if urlForm {
+		parsed, err := url.Parse(address)
+		if err != nil || parsed.Scheme != "tcp" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" {
+			return fmt.Errorf("invalid %s %q", label, value)
+		}
+		address = parsed.Host
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("invalid %s %q", label, value)
+	}
+	if !isLocalControlAddress(host) {
+		return fmt.Errorf("%s must use a loopback address", label)
+	}
+	portNumber, err := net.LookupPort("tcp", port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("invalid %s %q", label, value)
+	}
+	return nil
 }
 
 // Validate checks whether the control server can be safely exposed.
@@ -140,6 +200,12 @@ func DefaultConfig() *Config {
 			Address: "127.0.0.1",
 			Port:    9091,
 		},
+		Runtime: RuntimeConfig{
+			StatusAddress:  defaultRuntimeStatusAddress,
+			RPCAddress:     defaultRuntimeRPCAddress,
+			StartupTimeout: defaultRuntimeStartup,
+			ProbeInterval:  defaultRuntimeProbeInterval,
+		},
 		WorkerCount:    4, // Default to a reasonable number
 		WorkerCommand:  "worker.php",
 		PhpBinary:      "php",
@@ -201,6 +267,11 @@ func loadConfigFromDir(root string) (*Config, error) {
 	if _, present := raw["max_upload_files"]; present && overlay.MaxUploadFiles <= 0 {
 		return cfg, fmt.Errorf("max_upload_files must be positive")
 	}
+	if runtimeRaw, present := raw["runtime"]; present {
+		if err := validateExplicitRuntimeTiming(runtimeRaw); err != nil {
+			return cfg, err
+		}
+	}
 
 	mergeConfig(cfg, overlay)
 	cfg.Scripts = mergeScripts(composerScripts, overlay.Scripts)
@@ -253,6 +324,18 @@ func mergeConfig(dst, overlay *Config) {
 	if overlay.MaxUploadFiles != 0 {
 		dst.MaxUploadFiles = overlay.MaxUploadFiles
 	}
+	if overlay.Runtime.StatusAddress != "" {
+		dst.Runtime.StatusAddress = overlay.Runtime.StatusAddress
+	}
+	if overlay.Runtime.RPCAddress != "" {
+		dst.Runtime.RPCAddress = overlay.Runtime.RPCAddress
+	}
+	if overlay.Runtime.StartupTimeout != 0 {
+		dst.Runtime.StartupTimeout = overlay.Runtime.StartupTimeout
+	}
+	if overlay.Runtime.ProbeInterval != 0 {
+		dst.Runtime.ProbeInterval = overlay.Runtime.ProbeInterval
+	}
 }
 
 func mergeScripts(base, overlay map[string]string) map[string]string {
@@ -269,6 +352,30 @@ func mergeScripts(base, overlay map[string]string) map[string]string {
 func validateConfig(cfg *Config) error {
 	if cfg.MaxBodyBytes <= 0 || cfg.MaxUploadBytes <= 0 || cfg.MaxUploadFiles <= 0 {
 		return fmt.Errorf("request limits must be positive")
+	}
+	if err := cfg.Runtime.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateExplicitRuntimeTiming(raw json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("parse runtime configuration: %w", err)
+	}
+	for _, name := range []string{"startup_timeout", "probe_interval"} {
+		value, present := fields[name]
+		if !present {
+			continue
+		}
+		var duration time.Duration
+		if err := json.Unmarshal(value, &duration); err != nil {
+			return fmt.Errorf("parse runtime.%s: %w", name, err)
+		}
+		if duration <= 0 {
+			return fmt.Errorf("runtime.%s must be positive", name)
+		}
 	}
 	return nil
 }

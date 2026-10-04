@@ -10,6 +10,7 @@ const (
 	EngineRunning  EngineState = "running"
 	EngineStopping EngineState = "stopping"
 	EngineStopped  EngineState = "stopped"
+	EngineFailed   EngineState = "failed"
 )
 
 // ReadinessReason explains why the application is or is not ready.
@@ -21,6 +22,8 @@ const (
 	ReadinessWorkerCrashed ReadinessReason = "worker_crashed"
 	ReadinessReady         ReadinessReason = "ready"
 	ReadinessStopping      ReadinessReason = "stopping"
+	ReadinessProcessFailed ReadinessReason = "process_failed"
+	ReadinessTimeout       ReadinessReason = "timeout"
 )
 
 // RuntimeSnapshot is an immutable copy of Engine and worker-pool state.
@@ -31,6 +34,7 @@ type RuntimeSnapshot struct {
 	ReadyWorkers      int
 	ActiveWorkers     int
 	TotalWorkers      int
+	WorkerCountsKnown bool
 	WorkerCrashes     uint64
 	WorkerRestarts    uint64
 	StartedAt         time.Time
@@ -45,12 +49,12 @@ type SnapshotProvider interface {
 
 // Healthy reports whether the Engine process is alive enough for liveness.
 func (s RuntimeSnapshot) Healthy() bool {
-	return s.EngineState != EngineStopped
+	return s.EngineState != EngineStopped && s.EngineState != EngineFailed
 }
 
 // Ready reports whether the Engine can accept application traffic.
 func (s RuntimeSnapshot) Ready() bool {
 	return s.EngineState == EngineRunning &&
 		s.ReadinessReason == ReadinessReady &&
-		s.ReadyWorkers > 0
+		(s.ReadyWorkers > 0 || !s.WorkerCountsKnown)
 }

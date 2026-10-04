@@ -25,14 +25,15 @@ func readySnapshot() RuntimeSnapshot {
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 
 	return RuntimeSnapshot{
-		EngineState:     EngineRunning,
-		ReadinessReason: ReadinessReady,
-		DesiredWorkers:  2,
-		ReadyWorkers:    2,
-		ActiveWorkers:   0,
-		TotalWorkers:    2,
-		StartedAt:       now,
-		StateChangedAt:  now,
+		EngineState:       EngineRunning,
+		ReadinessReason:   ReadinessReady,
+		DesiredWorkers:    2,
+		ReadyWorkers:      2,
+		ActiveWorkers:     0,
+		TotalWorkers:      2,
+		WorkerCountsKnown: true,
+		StartedAt:         now,
+		StateChangedAt:    now,
 	}
 }
 
@@ -74,6 +75,14 @@ func TestHealthAndReadinessUseStableStatusCodes(t *testing.T) {
 			wantStatus: "not_ready",
 			wantReason: "no_workers",
 		},
+		{
+			name:       "failed process is unavailable",
+			snapshot:   RuntimeSnapshot{EngineState: EngineFailed, ReadinessReason: ReadinessProcessFailed},
+			path:       "/v1/readyz",
+			wantCode:   503,
+			wantStatus: "not_ready",
+			wantReason: "process_failed",
+		},
 	}
 
 	for _, tt := range tests {
@@ -104,6 +113,15 @@ func TestHealthAndReadinessUseStableStatusCodes(t *testing.T) {
 			}
 			if tt.wantReason != "" && body["error"] != tt.wantStatus {
 				t.Fatalf("error = %v, want %s", body["error"], tt.wantStatus)
+			}
+			if tt.path == "/v1/readyz" {
+				workers, ok := body["workers"].(map[string]interface{})
+				if !ok {
+					t.Fatalf("workers response = %v", body["workers"])
+				}
+				if _, ok := workers["known"]; !ok {
+					t.Fatalf("workers response lacks knowledge flag: %v", workers)
+				}
 			}
 		})
 	}
