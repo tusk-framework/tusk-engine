@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tusk-framework/tusk-engine/internal/config"
+	"github.com/tusk-framework/tusk-engine/internal/control"
 	"github.com/tusk-framework/tusk-engine/internal/metrics"
 	"github.com/tusk-framework/tusk-engine/internal/php"
 )
@@ -58,6 +59,7 @@ type Pool struct {
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 	newCommand  commandFactory
+	snapshot    control.RuntimeSnapshot
 }
 
 // NewPool creates a new worker pool.
@@ -75,6 +77,7 @@ func newPoolWithCommandFactory(cfg *config.Config, factory commandFactory) (*Poo
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	now := time.Now().UTC()
 	return &Pool{
 		cfg:         cfg,
 		phpMgr:      mgr,
@@ -82,7 +85,67 @@ func newPoolWithCommandFactory(cfg *config.Config, factory commandFactory) (*Poo
 		ctx:         ctx,
 		cancel:      cancel,
 		newCommand:  factory,
+		snapshot: control.RuntimeSnapshot{
+			EngineState:     control.EngineStarting,
+			ReadinessReason: control.ReadinessStarting,
+			DesiredWorkers:  cfg.WorkerCount,
+			StartedAt:       now,
+			StateChangedAt:  now,
+		},
 	}, nil
+}
+
+// Snapshot returns a point-in-time copy of Engine and worker-pool state.
+func (p *Pool) Snapshot() control.RuntimeSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.snapshot
+}
+
+func (p *Pool) setEngineStateLocked(state control.EngineState) {
+	if p.snapshot.EngineState != state {
+		p.snapshot.EngineState = state
+		p.snapshot.StateChangedAt = time.Now().UTC()
+	}
+
+	p.refreshWorkerSnapshotLocked()
+}
+
+func (p *Pool) recordWorkerFailureLocked(category string) {
+	if category == "worker_crashed" {
+		p.snapshot.WorkerCrashes++
+	}
+	if category == "restart_failed" {
+		p.snapshot.WorkerRestarts++
+	}
+	p.snapshot.LastErrorCategory = category
+}
+
+func (p *Pool) refreshWorkerSnapshotLocked() {
+	p.snapshot.TotalWorkers = len(p.workers)
+	p.snapshot.ReadyWorkers = len(p.workerQueue)
+	p.snapshot.ActiveWorkers = p.snapshot.TotalWorkers - p.snapshot.ReadyWorkers
+	if p.snapshot.ActiveWorkers < 0 {
+		p.snapshot.ActiveWorkers = 0
+	}
+
+	switch p.snapshot.EngineState {
+	case control.EngineStopping:
+		p.snapshot.ReadinessReason = control.ReadinessStopping
+	case control.EngineStopped:
+		p.snapshot.ReadinessReason = control.ReadinessStopping
+	case control.EngineStarting:
+		p.snapshot.ReadinessReason = control.ReadinessStarting
+	case control.EngineRunning:
+		if p.snapshot.ReadyWorkers > 0 {
+			p.snapshot.ReadinessReason = control.ReadinessReady
+		} else if p.snapshot.LastErrorCategory == "worker_crashed" || p.snapshot.LastErrorCategory == "restart_failed" {
+			p.snapshot.ReadinessReason = control.ReadinessWorkerCrashed
+		} else {
+			p.snapshot.ReadinessReason = control.ReadinessNoWorkers
+		}
+	}
 }
 
 // Start spawns the configured number of workers.
@@ -92,10 +155,18 @@ func (p *Pool) Start() error {
 
 	for i := 0; i < p.cfg.WorkerCount; i++ {
 		if err := p.spawnWorker(i); err != nil {
+			p.mu.Lock()
+			p.recordWorkerFailureLocked("startup_failed")
+			p.refreshWorkerSnapshotLocked()
+			p.mu.Unlock()
 			p.Stop()
 			return err
 		}
 	}
+
+	p.mu.Lock()
+	p.setEngineStateLocked(control.EngineRunning)
+	p.mu.Unlock()
 	return nil
 }
 
@@ -149,8 +220,13 @@ func (p *Pool) spawnWorker(id int) error {
 	case p.workerQueue <- worker:
 	case <-p.ctx.Done():
 		p.terminate(worker)
+		p.removeWorker(worker)
 		return fmt.Errorf("pool shutting down")
 	}
+
+	p.mu.Lock()
+	p.refreshWorkerSnapshotLocked()
+	p.mu.Unlock()
 
 	go p.watchWorker(worker)
 	return nil
@@ -181,9 +257,22 @@ func (p *Pool) watchWorker(worker *Process) {
 		return
 	default:
 	}
+	p.mu.Lock()
+	p.recordWorkerFailureLocked("worker_crashed")
+	p.refreshWorkerSnapshotLocked()
+	p.mu.Unlock()
 	if err := p.spawnWorker(worker.ID); err != nil {
 		log.Printf("Worker %d restart failed: %v", worker.ID, err)
+		p.mu.Lock()
+		p.recordWorkerFailureLocked("restart_failed")
+		p.refreshWorkerSnapshotLocked()
+		p.mu.Unlock()
+		return
 	}
+	p.mu.Lock()
+	p.snapshot.WorkerRestarts++
+	p.refreshWorkerSnapshotLocked()
+	p.mu.Unlock()
 }
 
 func (p *Pool) removeWorker(target *Process) {
@@ -220,8 +309,10 @@ func (p *Pool) HandleRequest(req map[string]interface{}) (map[string]interface{}
 			return nil, fmt.Errorf("pool shutting down")
 		}
 	}
-
 leased:
+	p.mu.Lock()
+	p.refreshWorkerSnapshotLocked()
+	p.mu.Unlock()
 	p.wg.Add(1)
 	defer p.wg.Done()
 	defer p.release(worker)
@@ -261,6 +352,9 @@ leased:
 
 func (p *Pool) release(worker *Process) {
 	if !worker.isAlive() {
+		p.mu.Lock()
+		p.refreshWorkerSnapshotLocked()
+		p.mu.Unlock()
 		return
 	}
 	select {
@@ -268,10 +362,21 @@ func (p *Pool) release(worker *Process) {
 	case <-p.ctx.Done():
 		p.terminate(worker)
 	}
+	p.mu.Lock()
+	p.refreshWorkerSnapshotLocked()
+	p.mu.Unlock()
 }
 
 // Stop terminates all workers and prevents future restarts.
 func (p *Pool) Stop() {
+	p.mu.Lock()
+	if p.snapshot.EngineState == control.EngineStopped {
+		p.mu.Unlock()
+		return
+	}
+	p.setEngineStateLocked(control.EngineStopping)
+	p.mu.Unlock()
+
 	p.cancel()
 
 	done := make(chan struct{})
@@ -292,4 +397,7 @@ func (p *Pool) Stop() {
 	for _, worker := range workers {
 		p.terminate(worker)
 	}
+	p.mu.Lock()
+	p.setEngineStateLocked(control.EngineStopped)
+	p.mu.Unlock()
 }
