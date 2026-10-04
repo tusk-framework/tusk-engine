@@ -33,14 +33,15 @@ type WorkerFile struct {
 	ownedPath    string
 	identity     os.FileInfo
 	directory    workerDirectory
+	quarantine   string
 }
 
 type workerDirectory interface {
 	CreateTemp() (*os.File, string, error)
-	Publish(string) error
+	Publish(*os.File, string) error
 	MoveToQuarantine() (string, error)
 	Restore(string) error
-	Remove(string) error
+	RemoveOwned(string, os.FileInfo) error
 	Stat(string) (os.FileInfo, error)
 	StillAtPath() bool
 	Close() error
@@ -49,9 +50,11 @@ type workerDirectory interface {
 type workerHooks struct {
 	beforeTemp        func()
 	beforePublish     func()
+	afterTempIdentity func()
 	afterPublish      func()
 	beforeCleanupMove func()
 	afterCleanupMove  func()
+	afterCleanupCheck func()
 }
 
 // WriteWorker creates the private RoadRunner worker in the project runtime directory.
@@ -108,30 +111,24 @@ func writeWorkerWithHooks(root string, hooks workerHooks) (WorkerFile, error) {
 	if err != nil {
 		return zero, fmt.Errorf("create temporary worker: %w", err)
 	}
+	defer temporary.Close()
 	identity, err := temporary.Stat()
 	if err != nil {
-		_ = temporary.Close()
 		return zero, fmt.Errorf("inspect temporary worker: %w", err)
 	}
-	defer func() {
-		if current, statErr := directory.Stat(temporaryName); statErr == nil && os.SameFile(identity, current) {
-			_ = directory.Remove(temporaryName)
-		}
-	}()
+	if temporaryName != "" {
+		defer func() {
+			_ = directory.RemoveOwned(temporaryName, identity)
+		}()
+	}
 	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
 		return zero, fmt.Errorf("restrict temporary worker: %w", err)
 	}
 	if _, err := temporary.WriteString(workerContents); err != nil {
-		_ = temporary.Close()
 		return zero, fmt.Errorf("write temporary worker: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
 		return zero, fmt.Errorf("sync temporary worker: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return zero, fmt.Errorf("close temporary worker: %w", err)
 	}
 	if hooks.beforePublish != nil {
 		hooks.beforePublish()
@@ -139,13 +136,19 @@ func writeWorkerWithHooks(root string, hooks workerHooks) (WorkerFile, error) {
 	if !directory.StillAtPath() {
 		return zero, fmt.Errorf("runtime directory moved before worker publication")
 	}
-	current, err := directory.Stat(temporaryName)
-	if err != nil || !os.SameFile(identity, current) {
-		return zero, fmt.Errorf("temporary worker was replaced before publication")
+	if temporaryName != "" {
+		current, err := directory.Stat(temporaryName)
+		if err != nil || !os.SameFile(identity, current) {
+			return zero, fmt.Errorf("temporary worker was replaced before publication")
+		}
 	}
-	if err := directory.Publish(temporaryName); err != nil {
+	if hooks.afterTempIdentity != nil {
+		hooks.afterTempIdentity()
+	}
+	if err := directory.Publish(temporary, temporaryName); err != nil {
 		return zero, fmt.Errorf("publish worker without replacing an existing file: %w", err)
 	}
+	_ = temporary.Close()
 	published, err := directory.Stat("worker.php")
 	if err != nil || !os.SameFile(identity, published) {
 		return zero, fmt.Errorf("published worker identity changed")
@@ -153,22 +156,33 @@ func writeWorkerWithHooks(root string, hooks workerHooks) (WorkerFile, error) {
 	if hooks.afterPublish != nil {
 		hooks.afterPublish()
 	}
+	published, err = directory.Stat("worker.php")
+	if err != nil || !os.SameFile(identity, published) {
+		return zero, fmt.Errorf("published worker was replaced before ownership could be returned")
+	}
 	destination := filepath.Join(absoluteRoot, filepath.FromSlash(workerRelativePath))
 	worker := WorkerFile{Path: destination, RelativePath: workerRelativePath, ownedPath: destination, identity: identity, directory: directory}
 	if !directory.StillAtPath() {
-		_ = worker.Cleanup()
+		if cleanupErr := worker.Cleanup(); cleanupErr != nil {
+			return zero, fmt.Errorf("runtime directory moved during worker publication; cleanup: %w", cleanupErr)
+		}
 		return zero, fmt.Errorf("runtime directory moved during worker publication")
 	}
 	keepDirectory = true
 	return worker, nil
 }
 
-// Cleanup removes only the file created by this WorkerFile value.
+// Cleanup removes the owned file on Windows. On Linux it moves the worker
+// out of the active path and returns an error with the preserved quarantine
+// path because identity-safe deletion is unavailable.
 func (f *WorkerFile) Cleanup() error {
 	return f.cleanupWithHooks(workerHooks{})
 }
 
 func (f *WorkerFile) cleanupWithHooks(hooks workerHooks) error {
+	if f != nil && f.quarantine != "" {
+		return fmt.Errorf("worker quarantine artifact remains at %q", f.quarantine)
+	}
 	if f == nil || f.identity == nil {
 		return nil
 	}
@@ -204,16 +218,26 @@ func (f *WorkerFile) cleanupWithHooks(hooks workerHooks) error {
 	info, err := f.directory.Stat(quarantine)
 	if err != nil || !os.SameFile(f.identity, info) {
 		if restoreErr := f.directory.Restore(quarantine); restoreErr != nil {
+			f.preserveQuarantine(quarantine)
 			return fmt.Errorf("worker was replaced; preserve moved file %q: %w", quarantine, restoreErr)
 		}
 		f.finishCleanup()
 		return fmt.Errorf("refuse to remove replaced worker %q", f.Path)
 	}
-	if err := f.directory.Remove(quarantine); err != nil {
-		return fmt.Errorf("remove owned worker: %w", err)
+	if hooks.afterCleanupCheck != nil {
+		hooks.afterCleanupCheck()
+	}
+	if err := f.directory.RemoveOwned(quarantine, f.identity); err != nil {
+		f.preserveQuarantine(quarantine)
+		return fmt.Errorf("worker preserved in quarantine at %q: %w", f.quarantine, err)
 	}
 	f.finishCleanup()
 	return nil
+}
+
+func (f *WorkerFile) preserveQuarantine(name string) {
+	f.quarantine = filepath.Join(filepath.Dir(f.ownedPath), name)
+	f.finishCleanup()
 }
 
 func (f *WorkerFile) finishCleanup() {

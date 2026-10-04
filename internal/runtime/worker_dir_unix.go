@@ -1,4 +1,4 @@
-//go:build aix || darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris
+//go:build linux
 
 package runtime
 
@@ -71,25 +71,20 @@ func (d *unixWorkerDirectory) StillAtPath() bool {
 }
 
 func (d *unixWorkerDirectory) CreateTemp() (*os.File, string, error) {
-	for range 4 {
-		name, err := randomWorkerName(".worker-")
-		if err != nil {
-			return nil, "", err
-		}
-		fd, err := unix.Openat(int(d.runtime.Fd()), name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
-		if err == unix.EEXIST {
-			continue
-		}
-		if err != nil {
-			return nil, "", err
-		}
-		return os.NewFile(uintptr(fd), name), name, nil
+	fd, err := unix.Openat(int(d.runtime.Fd()), ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		return nil, "", fmt.Errorf("create anonymous temporary worker: %w", err)
 	}
-	return nil, "", fmt.Errorf("could not allocate unique temporary worker")
+	return os.NewFile(uintptr(fd), "anonymous-worker"), "", nil
 }
 
-func (d *unixWorkerDirectory) Publish(temp string) error {
-	return renameWorkerNoReplace(int(d.runtime.Fd()), temp, "worker.php")
+func (d *unixWorkerDirectory) Publish(file *os.File, _ string) error {
+	if err := unix.Linkat(int(file.Fd()), "", int(d.runtime.Fd()), "worker.php", unix.AT_EMPTY_PATH); err == nil {
+		return nil
+	} else if err != unix.EPERM {
+		return err
+	}
+	return unix.Linkat(unix.AT_FDCWD, fmt.Sprintf("/proc/self/fd/%d", file.Fd()), int(d.runtime.Fd()), "worker.php", unix.AT_SYMLINK_FOLLOW)
 }
 
 func (d *unixWorkerDirectory) MoveToQuarantine() (string, error) {
@@ -104,11 +99,11 @@ func (d *unixWorkerDirectory) MoveToQuarantine() (string, error) {
 }
 
 func (d *unixWorkerDirectory) Restore(name string) error {
-	return renameWorkerNoReplace(int(d.runtime.Fd()), name, "worker.php")
+	return fmt.Errorf("cannot restore %q after quarantine ownership changed on Linux", name)
 }
 
-func (d *unixWorkerDirectory) Remove(name string) error {
-	return unix.Unlinkat(int(d.runtime.Fd()), name, 0)
+func (d *unixWorkerDirectory) RemoveOwned(name string, _ os.FileInfo) error {
+	return fmt.Errorf("cannot conditionally unlink %q by file identity on Linux", name)
 }
 
 func (d *unixWorkerDirectory) Stat(name string) (os.FileInfo, error) {

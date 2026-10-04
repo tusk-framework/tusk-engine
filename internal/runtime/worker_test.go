@@ -11,6 +11,7 @@ import (
 )
 
 func TestWriteWorkerCreatesPrivateDeterministicApplicationBridge(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	worker, err := WriteWorker(root)
 	if err != nil {
@@ -45,9 +46,7 @@ func TestWriteWorkerCreatesPrivateDeterministicApplicationBridge(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
 	}
-	if err := worker.Cleanup(); err != nil {
-		t.Fatal(err)
-	}
+	cleanupOwnedWorker(t, &worker)
 	again, err := WriteWorker(root)
 	if err != nil {
 		t.Fatal(err)
@@ -59,12 +58,11 @@ func TestWriteWorkerCreatesPrivateDeterministicApplicationBridge(t *testing.T) {
 	if string(second) != content {
 		t.Fatal("generated content changed between writes")
 	}
-	if err := again.Cleanup(); err != nil {
-		t.Fatal(err)
-	}
+	cleanupOwnedWorker(t, &again)
 }
 
 func TestWriteWorkerPreservesUserFilesAndRejectsExistingDestination(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	for _, rel := range []string{"worker.php", "bootstrap/app.php", "config/app.php", "routes/web.php", ".tusk/runtime/user.php"} {
 		path := filepath.Join(root, filepath.FromSlash(rel))
@@ -89,12 +87,7 @@ func TestWriteWorkerPreservesUserFilesAndRejectsExistingDestination(t *testing.T
 	if _, err := WriteWorker(root); err == nil {
 		t.Fatal("second write overwrote the first worker")
 	}
-	if err := worker.Cleanup(); err != nil {
-		t.Fatal(err)
-	}
-	if err := worker.Cleanup(); err != nil {
-		t.Fatalf("repeated cleanup: %v", err)
-	}
+	cleanupOwnedWorker(t, &worker)
 	for _, rel := range []string{"worker.php", "bootstrap/app.php", "config/app.php", "routes/web.php", ".tusk/runtime/user.php"} {
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil || string(data) != rel {
@@ -104,6 +97,7 @@ func TestWriteWorkerPreservesUserFilesAndRejectsExistingDestination(t *testing.T
 }
 
 func TestWriteWorkerDoesNotOverwriteExistingRuntimeWorker(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	destination := filepath.Join(root, ".tusk", "runtime", "worker.php")
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
@@ -122,6 +116,7 @@ func TestWriteWorkerDoesNotOverwriteExistingRuntimeWorker(t *testing.T) {
 }
 
 func TestWorkerCleanupRefusesMutatedOrReplacedFile(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	worker, err := WriteWorker(root)
 	if err != nil {
@@ -152,6 +147,7 @@ func TestWorkerCleanupRefusesMutatedOrReplacedFile(t *testing.T) {
 }
 
 func TestWriteWorkerRejectsUnsafeRootsAndSymlinkedRuntime(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	for _, bad := range []string{"", " ", ".", "..", root + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(root)} {
 		if _, err := WriteWorker(bad); err == nil {
@@ -178,6 +174,7 @@ func TestDefaultWorkerCommandPointsToGeneratedRuntimeWorker(t *testing.T) {
 }
 
 func TestWriteWorkerDoesNotClobberFileCreatedAtPublication(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	destination := filepath.Join(root, ".tusk", "runtime", "worker.php")
 	called := false
@@ -201,6 +198,9 @@ func TestWriteWorkerDoesNotClobberFileCreatedAtPublication(t *testing.T) {
 }
 
 func TestWriteWorkerDoesNotPublishOrRemoveReplacedTemporaryFile(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows uses a named temporary file; Linux uses O_TMPFILE")
+	}
 	root := t.TempDir()
 	runtimePath := filepath.Join(root, ".tusk", "runtime")
 	var replacementPath string
@@ -229,7 +229,40 @@ func TestWriteWorkerDoesNotPublishOrRemoveReplacedTemporaryFile(t *testing.T) {
 	}
 }
 
-func TestWriteWorkerAtomicallyMovesTemporaryFileIntoPlace(t *testing.T) {
+func TestWriteWorkerDoesNotPublishTempReplacedAfterIdentityCheck(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows uses a named temporary file; Linux uses O_TMPFILE")
+	}
+	root := t.TempDir()
+	runtimePath := filepath.Join(root, ".tusk", "runtime")
+	var replacementPath string
+	worker, err := writeWorkerWithHooks(root, workerHooks{afterTempIdentity: func() {
+		entries, readErr := os.ReadDir(runtimePath)
+		if readErr != nil || len(entries) != 1 {
+			t.Fatalf("temporary entries: %v, %v", entries, readErr)
+		}
+		replacementPath = filepath.Join(runtimePath, entries[0].Name())
+		if renameErr := os.Rename(replacementPath, filepath.Join(root, "owned-temp.php")); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		if writeErr := os.WriteFile(replacementPath, []byte("replacement temp"), 0o600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}})
+	if err == nil {
+		defer worker.Cleanup()
+	}
+	destination := filepath.Join(runtimePath, "worker.php")
+	if data, readErr := os.ReadFile(destination); readErr == nil && string(data) == "replacement temp" {
+		t.Fatal("replacement was published as worker.php")
+	}
+	if data, readErr := os.ReadFile(replacementPath); readErr != nil || string(data) != "replacement temp" {
+		t.Fatalf("replacement temp was removed: %q, %v", data, readErr)
+	}
+}
+
+func TestWriteWorkerPublishesCompleteFileWithoutStagingEntry(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	runtimePath := filepath.Join(root, ".tusk", "runtime")
 	observed := false
@@ -253,7 +286,28 @@ func TestWriteWorkerAtomicallyMovesTemporaryFileIntoPlace(t *testing.T) {
 	}
 }
 
+func TestWriteWorkerRejectsReplacementAfterPublication(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
+	root := t.TempDir()
+	destination := filepath.Join(root, ".tusk", "runtime", "worker.php")
+	_, err := writeWorkerWithHooks(root, workerHooks{afterPublish: func() {
+		if renameErr := os.Rename(destination, filepath.Join(root, "owned-worker.php")); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		if writeErr := os.WriteFile(destination, []byte("replacement"), 0o600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}})
+	if err == nil {
+		t.Fatal("writer accepted a replacement at the published path")
+	}
+	if data, readErr := os.ReadFile(destination); readErr != nil || string(data) != "replacement" {
+		t.Fatalf("replacement changed: %q, %v", data, readErr)
+	}
+}
+
 func TestWriteWorkerDoesNotFollowRuntimeDirectoryReplacement(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	runtimePath := filepath.Join(root, ".tusk", "runtime")
 	movedPath := filepath.Join(root, ".tusk", "runtime-moved")
@@ -288,6 +342,7 @@ func TestWriteWorkerDoesNotFollowRuntimeDirectoryReplacement(t *testing.T) {
 }
 
 func TestWorkerCleanupDoesNotDeleteReplacementAtRemoval(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	worker, err := WriteWorker(root)
 	if err != nil {
@@ -307,9 +362,20 @@ func TestWorkerCleanupDoesNotDeleteReplacementAtRemoval(t *testing.T) {
 	if !called || err == nil {
 		t.Fatalf("cleanup did not reject replacement: called=%v, err=%v", called, err)
 	}
-	data, readErr := os.ReadFile(worker.Path)
-	if readErr != nil || string(data) != "replacement" {
-		t.Fatalf("replacement was removed or changed: %q, %v", data, readErr)
+	if runtime.GOOS == "linux" {
+		entries, readErr := os.ReadDir(filepath.Dir(worker.Path))
+		if readErr != nil || len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), ".worker-quarantine-") {
+			t.Fatalf("replacement was not preserved in quarantine: %v, %v", entries, readErr)
+		}
+		data, readErr := os.ReadFile(filepath.Join(filepath.Dir(worker.Path), entries[0].Name()))
+		if readErr != nil || string(data) != "replacement" {
+			t.Fatalf("quarantined replacement changed: %q, %v", data, readErr)
+		}
+	} else {
+		data, readErr := os.ReadFile(worker.Path)
+		if readErr != nil || string(data) != "replacement" {
+			t.Fatalf("replacement was removed or changed: %q, %v", data, readErr)
+		}
 	}
 	if _, statErr := os.Stat(ownedCopy); statErr != nil {
 		t.Fatalf("original worker disappeared: %v", statErr)
@@ -317,6 +383,7 @@ func TestWorkerCleanupDoesNotDeleteReplacementAtRemoval(t *testing.T) {
 }
 
 func TestWorkerCleanupPreservesReplacementCreatedAfterMove(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	worker, err := WriteWorker(root)
 	if err != nil {
@@ -329,7 +396,7 @@ func TestWorkerCleanupPreservesReplacementCreatedAfterMove(t *testing.T) {
 			t.Fatal(writeErr)
 		}
 	}})
-	if !called || err != nil {
+	if !called || (runtime.GOOS == "windows" && err != nil) || (runtime.GOOS == "linux" && err == nil) {
 		t.Fatalf("cleanup after replacement: called=%v, err=%v", called, err)
 	}
 	data, readErr := os.ReadFile(worker.Path)
@@ -339,6 +406,7 @@ func TestWorkerCleanupPreservesReplacementCreatedAfterMove(t *testing.T) {
 }
 
 func TestWorkerCleanupDoesNotMoveExistingReplacement(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
 	root := t.TempDir()
 	worker, err := WriteWorker(root)
 	if err != nil {
@@ -358,6 +426,71 @@ func TestWorkerCleanupDoesNotMoveExistingReplacement(t *testing.T) {
 	data, readErr := os.ReadFile(worker.Path)
 	if readErr != nil || string(data) != "replacement" {
 		t.Fatalf("replacement changed: %q, %v", data, readErr)
+	}
+}
+
+func TestWorkerCleanupDoesNotRemoveQuarantineReplacement(t *testing.T) {
+	requireSupportedWorkerPlatform(t)
+	root := t.TempDir()
+	worker, err := WriteWorker(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := filepath.Join(root, ".tusk", "runtime")
+	var replacementPath string
+	_ = worker.cleanupWithHooks(workerHooks{afterCleanupCheck: func() {
+		entries, readErr := os.ReadDir(runtimePath)
+		if readErr != nil || len(entries) != 1 {
+			t.Fatalf("quarantine entries: %v, %v", entries, readErr)
+		}
+		replacementPath = filepath.Join(runtimePath, entries[0].Name())
+		if renameErr := os.Rename(replacementPath, filepath.Join(root, "owned-worker.php")); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		if writeErr := os.WriteFile(replacementPath, []byte("quarantine replacement"), 0o600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}})
+	if replacementPath == "" {
+		t.Fatal("cleanup identity seam was not reached")
+	}
+	if data, readErr := os.ReadFile(replacementPath); readErr != nil || string(data) != "quarantine replacement" {
+		t.Fatalf("quarantine replacement was removed: %q, %v", data, readErr)
+	}
+}
+
+func TestLinuxCleanupPreservesQuarantineWhenIdentityChanges(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux quarantine ownership contract")
+	}
+	root := t.TempDir()
+	worker, err := WriteWorker(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := filepath.Dir(worker.Path)
+	var replacementPath string
+	err = worker.cleanupWithHooks(workerHooks{afterCleanupMove: func() {
+		entries, readErr := os.ReadDir(runtimePath)
+		if readErr != nil || len(entries) != 1 {
+			t.Fatalf("quarantine entries: %v, %v", entries, readErr)
+		}
+		replacementPath = filepath.Join(runtimePath, entries[0].Name())
+		if renameErr := os.Rename(replacementPath, filepath.Join(root, "owned-worker.php")); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		if writeErr := os.WriteFile(replacementPath, []byte("replacement"), 0o600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}})
+	if err == nil {
+		t.Fatal("cleanup accepted a changed quarantine identity")
+	}
+	if data, readErr := os.ReadFile(replacementPath); readErr != nil || string(data) != "replacement" {
+		t.Fatalf("quarantine replacement was not preserved: %q, %v", data, readErr)
+	}
+	if _, statErr := os.Lstat(worker.Path); !os.IsNotExist(statErr) {
+		t.Fatalf("worker path was restored despite uncertain ownership: %v", statErr)
 	}
 }
 
@@ -385,5 +518,92 @@ func TestWorkerCleanupRestoresDirectoryReplacementOnWindows(t *testing.T) {
 	info, statErr := os.Stat(worker.Path)
 	if statErr != nil || !info.IsDir() {
 		t.Fatalf("replacement directory was not restored: %v, %v", info, statErr)
+	}
+}
+
+func TestLinuxWorkerPublishesFromAnonymousTemporaryFile(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux O_TMPFILE publication")
+	}
+	root := t.TempDir()
+	runtimePath := filepath.Join(root, ".tusk", "runtime")
+	checked := 0
+	checkNoSourceName := func() {
+		checked++
+		entries, err := os.ReadDir(runtimePath)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("anonymous worker acquired a replaceable name: %v, %v", entries, err)
+		}
+	}
+	worker, err := writeWorkerWithHooks(root, workerHooks{
+		beforePublish:     checkNoSourceName,
+		afterTempIdentity: checkNoSourceName,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked != 2 {
+		t.Fatalf("source-name checks reached %d times, want 2", checked)
+	}
+	data, err := os.ReadFile(worker.Path)
+	if err != nil || !strings.Contains(string(data), "runWorker()") {
+		t.Fatalf("published worker is incomplete: %q, %v", data, err)
+	}
+	cleanupOwnedWorker(t, &worker)
+}
+
+func TestUnsupportedUnixWorkerFailsBeforeCreatingRuntime(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
+		t.Skip("supported worker platform")
+	}
+	root := t.TempDir()
+	if _, err := WriteWorker(root); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("unsupported worker platform error = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".tusk")); !os.IsNotExist(err) {
+		t.Fatalf("unsupported platform created runtime directory: %v", err)
+	}
+}
+
+func requireSupportedWorkerPlatform(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
+		t.Skip("worker generation supports Windows and Linux")
+	}
+}
+
+func cleanupOwnedWorker(t *testing.T, worker *WorkerFile) {
+	t.Helper()
+	err := worker.Cleanup()
+	if runtime.GOOS == "windows" {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := worker.Cleanup(); err != nil {
+			t.Fatalf("repeated cleanup: %v", err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), "preserved in quarantine") {
+		t.Fatalf("Linux cleanup did not report preserved worker: %v", err)
+	}
+	if _, statErr := os.Lstat(worker.Path); !os.IsNotExist(statErr) {
+		t.Fatalf("worker path remains after quarantine: %v", statErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Dir(worker.Path))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	found := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".worker-quarantine-") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("owned worker quarantine artifact was not preserved")
+	}
+	if err := worker.Cleanup(); err == nil {
+		t.Fatal("repeated cleanup hid the preserved quarantine artifact")
 	}
 }

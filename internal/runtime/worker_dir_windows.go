@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -84,23 +85,51 @@ func (d *windowsWorkerDirectory) StillAtPath() bool {
 }
 
 func (d *windowsWorkerDirectory) CreateTemp() (*os.File, string, error) {
-	file, err := os.CreateTemp(d.runtimePath, ".worker-*")
-	if err != nil {
-		return nil, "", err
+	for range 4 {
+		name, err := randomWorkerName(".worker-")
+		if err != nil {
+			return nil, "", err
+		}
+		path := filepath.Join(d.runtimePath, name)
+		wide, err := windows.UTF16PtrFromString(path)
+		if err != nil {
+			return nil, "", err
+		}
+		handle, err := windows.CreateFile(wide, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
+			windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		if err == windows.ERROR_FILE_EXISTS {
+			continue
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		return os.NewFile(uintptr(handle), path), name, nil
 	}
-	return file, filepath.Base(file.Name()), nil
+	return nil, "", fmt.Errorf("could not allocate unique temporary worker")
 }
 
-func (d *windowsWorkerDirectory) Publish(temp string) error {
-	from, err := windows.UTF16PtrFromString(filepath.Join(d.runtimePath, temp))
+type workerRenameInformation struct {
+	ReplaceIfExists uint32
+	RootDirectory   windows.Handle
+	FileNameLength  uint32
+	FileName        [1]uint16
+}
+
+func (d *windowsWorkerDirectory) Publish(file *os.File, _ string) error {
+	name, err := windows.UTF16FromString("worker.php")
 	if err != nil {
 		return err
 	}
-	to, err := windows.UTF16PtrFromString(filepath.Join(d.runtimePath, "worker.php"))
-	if err != nil {
-		return err
-	}
-	return windows.MoveFileEx(from, to, 0)
+	nameLength := (len(name) - 1) * 2
+	var layout workerRenameInformation
+	buffer := make([]byte, int(unsafe.Offsetof(layout.FileName))+nameLength)
+	rename := (*workerRenameInformation)(unsafe.Pointer(&buffer[0]))
+	rename.RootDirectory = windows.Handle(d.runtime.Fd())
+	rename.FileNameLength = uint32(nameLength)
+	copy(unsafe.Slice(&rename.FileName[0], len(name)-1), name[:len(name)-1])
+	var status windows.IO_STATUS_BLOCK
+	return windows.NtSetInformationFile(windows.Handle(file.Fd()), &status, &buffer[0], uint32(len(buffer)), windows.FileRenameInformation)
 }
 
 func (d *windowsWorkerDirectory) MoveToQuarantine() (string, error) {
@@ -134,8 +163,29 @@ func (d *windowsWorkerDirectory) Restore(name string) error {
 	return windows.MoveFileEx(from, to, 0)
 }
 
-func (d *windowsWorkerDirectory) Remove(name string) error {
-	return os.Remove(filepath.Join(d.runtimePath, name))
+func (d *windowsWorkerDirectory) RemoveOwned(name string, identity os.FileInfo) error {
+	path := filepath.Join(d.runtimePath, name)
+	wide, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	handle, err := windows.CreateFile(wide, windows.FILE_READ_ATTRIBUTES|windows.DELETE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
+		windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(handle), path)
+	defer file.Close()
+	current, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(identity, current) {
+		return fmt.Errorf("refuse to remove replaced file %q", name)
+	}
+	deleteFile := byte(1)
+	return windows.SetFileInformationByHandle(handle, windows.FileDispositionInfo, &deleteFile, 1)
 }
 
 func (d *windowsWorkerDirectory) Stat(name string) (os.FileInfo, error) {
