@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed design approved in conversation on 2026-10-04. Implementation is
-pending written-spec review.
+Design approved in conversation on 2026-10-04. Implementation planning is
+next.
 
 ## Context
 
