@@ -118,8 +118,6 @@ Returns safe identity and capability information only:
     "arch": "amd64"
   },
   "runtime": {
-    "php_binary": "php",
-    "worker_command": "worker.php",
     "worker_count": 4,
     "timeout_seconds": 30
   },
