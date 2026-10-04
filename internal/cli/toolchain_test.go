@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,4 +103,44 @@ func TestToolchainCommandsRejectUnknownFlags(t *testing.T) {
 	if _, err := parseToolchainSetupArgs([]string{"--offline"}); err != nil {
 		t.Fatalf("parseToolchainSetupArgs() error = %v", err)
 	}
+}
+
+func TestBuildToolchainCommandUsesResolvedComposerAndIsolatedEnvironment(t *testing.T) {
+	cfg := &config.Config{ProjectRoot: t.TempDir()}
+	phpPath := filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain", "php", "php.exe")
+	composerPath := filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain", "composer", "composer.phar")
+	report := toolchain.Report{
+		ProjectRoot: cfg.ProjectRoot,
+		Platform:    toolchain.Platform{OS: "windows", Arch: "amd64"},
+		Tools: []toolchain.Tool{
+			{Name: string(toolchain.PHP), Available: true, Path: phpPath, Source: toolchain.SourceProject},
+			{Name: string(toolchain.Composer), Available: true, Path: composerPath, Source: toolchain.SourceProject},
+		},
+	}
+	originalPath := `C:\Windows\System32`
+	t.Setenv("PATH", originalPath)
+
+	cmd, err := buildToolchainCommand(cfg, report, toolchain.Composer, []string{"install"})
+	if err != nil {
+		t.Fatalf("buildToolchainCommand() error = %v", err)
+	}
+	if cmd.Path != phpPath || len(cmd.Args) < 3 || cmd.Args[1] != composerPath || cmd.Args[2] != "install" {
+		t.Fatalf("Composer command = path %q args %#v, want PHP + PHAR + install", cmd.Path, cmd.Args)
+	}
+	if got := commandEnvironmentValue(cmd.Env, "PATH"); !strings.HasPrefix(got, filepath.Dir(phpPath)+";") {
+		t.Fatalf("command PATH = %q, want project-local prefix", got)
+	}
+	if os.Getenv("PATH") != originalPath {
+		t.Fatalf("parent PATH changed to %q", os.Getenv("PATH"))
+	}
+}
+
+func commandEnvironmentValue(env []string, key string) string {
+	for _, item := range env {
+		parts := strings.SplitN(item, "=", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], key) {
+			return parts[1]
+		}
+	}
+	return ""
 }
