@@ -34,9 +34,24 @@ func TestProjectProducesDeterministicRoadRunnerConfig(t *testing.T) {
 		"address: 127.0.0.1:9090",
 		"num_workers: 6",
 		"max_request_size: 12",
+		"address: 127.0.0.1:2114",
+		"listen: tcp://127.0.0.1:6001",
 	} {
 		if !strings.Contains(string(first), expected) {
 			t.Fatalf("rendered config missing %q:\n%s", expected, first)
+		}
+	}
+}
+
+func TestProjectRejectsRemoteRuntimeControlEndpoints(t *testing.T) {
+	for _, mutate := range []func(*config.Config){
+		func(cfg *config.Config) { cfg.Runtime.StatusAddress = "0.0.0.0:2114" },
+		func(cfg *config.Config) { cfg.Runtime.RPCAddress = "tcp://example.test:6001" },
+	} {
+		cfg := config.DefaultConfig()
+		mutate(cfg)
+		if _, err := Project(cfg); err == nil {
+			t.Fatal("Project() accepted a remote runtime control endpoint")
 		}
 	}
 }

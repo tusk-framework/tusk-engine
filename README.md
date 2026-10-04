@@ -92,6 +92,12 @@ Create or edit `tusk.json` in your project root:
     "max_body_bytes": 10485760,
     "max_upload_bytes": 10485760,
     "max_upload_files": 20,
+    "runtime": {
+        "status_address": "127.0.0.1:2114",
+        "rpc_address": "tcp://127.0.0.1:6001",
+        "startup_timeout": 30000000000,
+        "probe_interval": 250000000
+    },
     "control": {
         "enabled": false,
         "address": "127.0.0.1",
@@ -160,7 +166,7 @@ The control API is disabled by default and does not change the public traffic se
 When enabled, the engine exposes:
 
 - `GET /v1/healthz` — process health; returns `200` during startup and graceful shutdown.
-- `GET /v1/readyz` — worker readiness; returns `200` only when at least one worker is ready.
+- `GET /v1/readyz` — RoadRunner readiness; returns `200` only after its status plugin reports an HTTP worker ready.
 - `GET /v1/metadata` — safe engine and runtime metadata.
 - `GET /v1/metrics` — Prometheus metrics.
 
@@ -210,7 +216,9 @@ tusk start custom-worker.php
 ```
 
 > [!TIP]
-> The engine's runtime manager generates or validates the RoadRunner command/configuration. You can customize the worker file in two ways:
+> The Engine generates a private RoadRunner configuration below `.tusk/runtime`, starts `rr serve`, waits for `/ready?plugin=http`, and shuts RoadRunner down gracefully. Status and RPC sockets are loopback-only by default. If RoadRunner is missing or fails readiness, `tusk start` exits with a diagnostic and never falls back to the legacy native server.
+>
+> You can customize the worker file in two ways:
 > 1. **Command-line**: `tusk start my-worker.php` (takes precedence)
 > 2. **Config file**: Set `"worker_command": "my-worker.php"` in `tusk.json`
 

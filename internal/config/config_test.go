@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefaultConfigHasSafeRequestLimits(t *testing.T) {
@@ -32,6 +33,50 @@ func TestDefaultConfigUsesDisabledLoopbackControl(t *testing.T) {
 	}
 	if cfg.Control.Port != 9091 {
 		t.Fatalf("expected control port 9091, got %d", cfg.Control.Port)
+	}
+}
+
+func TestDefaultConfigUsesLoopbackRuntimeDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Runtime.StatusAddress != "127.0.0.1:2114" {
+		t.Fatalf("runtime status address = %q, want 127.0.0.1:2114", cfg.Runtime.StatusAddress)
+	}
+	if cfg.Runtime.RPCAddress != "tcp://127.0.0.1:6001" {
+		t.Fatalf("runtime RPC address = %q, want tcp://127.0.0.1:6001", cfg.Runtime.RPCAddress)
+	}
+	if cfg.Runtime.StartupTimeout <= 0 || cfg.Runtime.ProbeInterval <= 0 {
+		t.Fatalf("runtime timings must be positive: %+v", cfg.Runtime)
+	}
+	if cfg.Runtime.StartupTimeout > 5*time.Minute || cfg.Runtime.ProbeInterval > time.Minute {
+		t.Fatalf("runtime timings must be bounded: %+v", cfg.Runtime)
+	}
+}
+
+func TestRuntimeConfigValidationRejectsUnsafeAddressesAndTimings(t *testing.T) {
+	base := DefaultConfig().Runtime
+	tests := []struct {
+		name   string
+		mutate func(*RuntimeConfig)
+		want   string
+	}{
+		{name: "remote status", mutate: func(c *RuntimeConfig) { c.StatusAddress = "0.0.0.0:2114" }, want: "status address"},
+		{name: "remote rpc", mutate: func(c *RuntimeConfig) { c.RPCAddress = "tcp://example.test:6001" }, want: "RPC address"},
+		{name: "malformed status", mutate: func(c *RuntimeConfig) { c.StatusAddress = "not-an-address" }, want: "status address"},
+		{name: "malformed rpc", mutate: func(c *RuntimeConfig) { c.RPCAddress = "http://127.0.0.1:6001" }, want: "RPC address"},
+		{name: "zero timeout", mutate: func(c *RuntimeConfig) { c.StartupTimeout = 0 }, want: "startup timeout"},
+		{name: "negative interval", mutate: func(c *RuntimeConfig) { c.ProbeInterval = -time.Second }, want: "probe interval"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.want)
+			}
+		})
 	}
 }
 

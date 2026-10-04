@@ -153,12 +153,14 @@ func (s *Server) handleReady(writer http.ResponseWriter, _ *http.Request) {
 		Version: "v1",
 		Status:  status,
 		Error:   errorCode,
+		Reason:  string(snapshot.ReadinessReason),
 		Message: message,
 		Engine:  string(snapshot.EngineState),
 		Workers: workerCounts{
 			Desired: snapshot.DesiredWorkers,
 			Ready:   snapshot.ReadyWorkers,
 			Active:  snapshot.ActiveWorkers,
+			Known:   snapshot.WorkerCountsKnown,
 		},
 		Timestamp: time.Now().UTC(),
 	})
@@ -187,6 +189,10 @@ func readinessMessage(reason ReadinessReason) string {
 		return "ready"
 	case ReadinessStopping:
 		return "engine is stopping"
+	case ReadinessProcessFailed:
+		return "engine process failed"
+	case ReadinessTimeout:
+		return "engine readiness timed out"
 	default:
 		return "engine is not ready"
 	}
@@ -203,6 +209,7 @@ type readinessResponse struct {
 	Version   string       `json:"version"`
 	Status    string       `json:"status"`
 	Error     string       `json:"error,omitempty"`
+	Reason    string       `json:"reason"`
 	Message   string       `json:"message"`
 	Engine    string       `json:"engine"`
 	Workers   workerCounts `json:"workers"`
@@ -210,9 +217,10 @@ type readinessResponse struct {
 }
 
 type workerCounts struct {
-	Desired int `json:"desired"`
-	Ready   int `json:"ready"`
-	Active  int `json:"active"`
+	Desired int  `json:"desired"`
+	Ready   int  `json:"ready"`
+	Active  int  `json:"active"`
+	Known   bool `json:"known"`
 }
 
 func writeJSON(writer http.ResponseWriter, statusCode int, value any) {

@@ -213,6 +213,37 @@ func Diagnose(options DiagnosticOptions) (Report, error) {
 	return Report{ProjectRoot: root, ManifestPath: manifestPath, Tools: tools, Ready: ready}, nil
 }
 
+// ResolveExecutable resolves one tool for a project and returns a startup-safe
+// diagnostic instead of silently installing or replacing anything.
+func ResolveExecutable(root string, name ToolName) (Tool, error) {
+	return ResolveExecutableWithOptions(root, name, DiagnosticOptions{})
+}
+
+// ResolveExecutableWithOptions is the injectable form used by tests and
+// callers that need deterministic discovery.
+func ResolveExecutableWithOptions(root string, name ToolName, options DiagnosticOptions) (Tool, error) {
+	if name != PHP && name != Composer && name != RoadRunner {
+		return Tool{}, fmt.Errorf("unknown tool %q", name)
+	}
+	options.Root = root
+	report, err := Diagnose(options)
+	if err != nil {
+		return Tool{}, err
+	}
+	tool := report.Tool(name)
+	if tool.Status != StatusOK {
+		label := string(name)
+		if name == RoadRunner {
+			label = "RoadRunner"
+		}
+		if tool.Error != "" {
+			return tool, fmt.Errorf("%s: %s; run tusk doctor", label, tool.Error)
+		}
+		return tool, fmt.Errorf("%s executable is unavailable; run tusk doctor", label)
+	}
+	return tool, nil
+}
+
 func resolve(root string, name ToolName, spec ToolSpec, override string, lookup func(string) (string, error), version func(string) (string, error)) Tool {
 	tool := Tool{
 		Name:             string(name),
@@ -241,7 +272,7 @@ func resolve(root string, name ToolName, spec ToolSpec, override string, lookup 
 	}
 
 	if tool.Path == "" {
-		lookupName := string(name)
+		lookupName := executableName(name)
 		if override != "" && spec.Path == "" {
 			lookupName = override
 		}
@@ -267,6 +298,13 @@ func resolve(root string, name ToolName, spec ToolSpec, override string, lookup 
 		tool.Error = fmt.Sprintf("requested %q, detected %q", spec.Version, tool.Version)
 	}
 	return tool
+}
+
+func executableName(name ToolName) string {
+	if name == RoadRunner {
+		return "rr"
+	}
+	return string(name)
 }
 
 func versionMatches(requested, detected string) bool {

@@ -12,6 +12,8 @@ type fileConfig struct {
 	Version string       `yaml:"version"`
 	Server  serverConfig `yaml:"server"`
 	HTTP    httpConfig   `yaml:"http"`
+	Status  statusConfig `yaml:"status"`
+	RPC     rpcConfig    `yaml:"rpc"`
 	Logs    logsConfig   `yaml:"logs"`
 }
 
@@ -44,6 +46,14 @@ type logsConfig struct {
 	Level string `yaml:"level"`
 }
 
+type statusConfig struct {
+	Address string `yaml:"address"`
+}
+
+type rpcConfig struct {
+	Listen string `yaml:"listen"`
+}
+
 // Project renders the canonical Tusk configuration as a RoadRunner v3 file.
 func Project(cfg *config.Config) ([]byte, error) {
 	if cfg == nil {
@@ -63,6 +73,9 @@ func Project(cfg *config.Config) ([]byte, error) {
 	}
 	if strings.TrimSpace(cfg.PhpBinary) == "" {
 		return nil, fmt.Errorf("php_binary is required")
+	}
+	if err := cfg.Runtime.Validate(); err != nil {
+		return nil, err
 	}
 
 	command := strings.TrimSpace(cfg.PhpBinary) + " " + strings.TrimSpace(cfg.WorkerCommand)
@@ -91,6 +104,8 @@ func Project(cfg *config.Config) ([]byte, error) {
 				},
 			},
 		},
+		Status: statusConfig{Address: cfg.Runtime.StatusAddress},
+		RPC:    rpcConfig{Listen: cfg.Runtime.RPCAddress},
 		Logs: logsConfig{
 			Mode:  "production",
 			Level: "warn",

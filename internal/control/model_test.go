@@ -42,16 +42,30 @@ func TestRuntimeSnapshotHealthAndReadiness(t *testing.T) {
 			reason:  ReadinessStopping,
 			healthy: false,
 		},
+		{
+			name:    "failed is not healthy or ready",
+			state:   EngineFailed,
+			reason:  ReadinessProcessFailed,
+			healthy: false,
+		},
+		{
+			name:    "road runner readiness does not require exact counters",
+			state:   EngineRunning,
+			reason:  ReadinessReady,
+			healthy: true,
+			isReady: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			snapshot := RuntimeSnapshot{
-				EngineState:     tt.state,
-				ReadinessReason: tt.reason,
-				ReadyWorkers:    tt.ready,
-				StartedAt:       now,
-				StateChangedAt:  now,
+				EngineState:       tt.state,
+				ReadinessReason:   tt.reason,
+				ReadyWorkers:      tt.ready,
+				WorkerCountsKnown: tt.name != "road runner readiness does not require exact counters",
+				StartedAt:         now,
+				StateChangedAt:    now,
 			}
 
 			if got := snapshot.Healthy(); got != tt.healthy {
