@@ -3,11 +3,13 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestManagerTracksRoadRunnerLifecycle(t *testing.T) {
-	process := &fakeProcess{}
+	process := newFakeProcess()
 	manager := NewManager(&fakeFactory{process: process}, ProcessSpec{Binary: "rr"})
 
 	if got := manager.State(); got != StateCreated {
@@ -31,8 +33,86 @@ func TestManagerTracksRoadRunnerLifecycle(t *testing.T) {
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
+	process.exit(nil)
 	if got := manager.State(); got != StateStopped {
 		t.Fatalf("final state = %s, want %s", got, StateStopped)
+	}
+}
+
+func TestManagerWaitReadyRetriesUntilProbeSucceeds(t *testing.T) {
+	process := newFakeProcess()
+	manager := NewManager(&fakeFactory{process: process}, ProcessSpec{Binary: "rr", DesiredWorkers: 4})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	probe := &sequenceProbe{errors: []error{ErrNotReady, ErrNotReady, nil}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.WaitReady(ctx, probe, time.Millisecond); err != nil {
+		t.Fatalf("WaitReady() error = %v", err)
+	}
+	snapshot := manager.Snapshot()
+	if !snapshot.Ready() || snapshot.DesiredWorkers != 4 || snapshot.WorkerCountsKnown {
+		t.Fatalf("snapshot = %+v, want ready with unknown exact counters", snapshot)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerMarksUnexpectedProcessExitAsFailed(t *testing.T) {
+	process := newFakeProcess()
+	manager := NewManager(&fakeFactory{process: process}, ProcessSpec{Binary: "rr"})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	process.exit(errors.New("child exited"))
+	deadline := time.Now().Add(time.Second)
+	for manager.State() != StateFailed && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if manager.State() != StateFailed {
+		t.Fatalf("state = %s, want failed", manager.State())
+	}
+	if got := manager.Snapshot().LastErrorCategory; got != "process_failed" {
+		t.Fatalf("error category = %q, want process_failed", got)
+	}
+}
+
+func TestManagerKillsAfterGracefulStopDeadline(t *testing.T) {
+	process := newFakeProcess()
+	process.gracefulBlocks = true
+	manager := NewManager(&fakeFactory{process: process}, ProcessSpec{Binary: "rr"})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := manager.Stop(ctx); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if !process.killed {
+		t.Fatal("Stop() did not kill after graceful stop deadline")
+	}
+	if manager.State() != StateStopped {
+		t.Fatalf("state = %s, want stopped", manager.State())
+	}
+}
+
+func TestManagerWaitReadyTimesOutWithStableCategory(t *testing.T) {
+	process := newFakeProcess()
+	manager := NewManager(&fakeFactory{process: process}, ProcessSpec{Binary: "rr"})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := manager.WaitReady(ctx, &sequenceProbe{errors: []error{ErrNotReady}}, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("WaitReady() error = %v, want timeout", err)
+	}
+	if manager.State() != StateFailed || manager.Snapshot().LastErrorCategory != "timeout" {
+		t.Fatalf("snapshot = %+v, want failed timeout", manager.Snapshot())
 	}
 }
 
@@ -50,9 +130,11 @@ func TestManagerMarksFailedWhenProcessCannotStart(t *testing.T) {
 type fakeFactory struct {
 	process Process
 	err     error
+	spec    ProcessSpec
 }
 
-func (f *fakeFactory) Start(ProcessSpec) (Process, error) {
+func (f *fakeFactory) Start(spec ProcessSpec) (Process, error) {
+	f.spec = spec
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -60,13 +142,52 @@ func (f *fakeFactory) Start(ProcessSpec) (Process, error) {
 }
 
 type fakeProcess struct {
-	reloaded bool
+	reloaded       bool
+	killed         bool
+	gracefulBlocks bool
+	waitCh         chan error
 }
 
-func (p *fakeProcess) GracefulStop(context.Context) error { return nil }
-func (p *fakeProcess) Kill() error                        { return nil }
+func newFakeProcess() *fakeProcess {
+	return &fakeProcess{waitCh: make(chan error, 1)}
+}
+
+func (p *fakeProcess) GracefulStop(ctx context.Context) error {
+	if p.gracefulBlocks {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	p.exit(nil)
+	return nil
+}
+func (p *fakeProcess) Kill() error {
+	p.killed = true
+	p.exit(nil)
+	return nil
+}
 func (p *fakeProcess) Reload() error {
 	p.reloaded = true
 	return nil
 }
-func (p *fakeProcess) Wait() error { return nil }
+func (p *fakeProcess) Wait() error { return <-p.waitCh }
+
+func (p *fakeProcess) exit(err error) {
+	select {
+	case p.waitCh <- err:
+	default:
+	}
+}
+
+type sequenceProbe struct {
+	errors []error
+	index  int
+}
+
+func (p *sequenceProbe) Check(context.Context) error {
+	if p.index >= len(p.errors) {
+		return p.errors[len(p.errors)-1]
+	}
+	err := p.errors[p.index]
+	p.index++
+	return err
+}
