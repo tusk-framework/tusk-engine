@@ -127,6 +127,7 @@ func (p *Pool) refreshWorkerSnapshotLocked() {
 	p.snapshot.TotalWorkers = len(p.workers)
 	p.snapshot.ReadyWorkers = len(p.workerQueue)
 	p.snapshot.ActiveWorkers = p.snapshot.TotalWorkers - p.snapshot.ReadyWorkers
+	metrics.WorkerQueueDepth.Set(float64(p.snapshot.ReadyWorkers))
 	if p.snapshot.ActiveWorkers < 0 {
 		p.snapshot.ActiveWorkers = 0
 	}
@@ -201,6 +202,7 @@ func (p *Pool) spawnWorker(id int) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start worker %d: %w", id, err)
 	}
+	metrics.WorkerStartsTotal.Inc()
 
 	worker := &Process{
 		cmd:       cmd,
@@ -245,6 +247,7 @@ func (p *Pool) watchWorker(worker *Process) {
 	}
 
 	log.Printf("Worker %d exited: %v. Restarting...", worker.ID, err)
+	metrics.WorkerCrashesTotal.Inc()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 	select {
@@ -291,6 +294,7 @@ func (p *Pool) terminate(worker *Process) {
 	if !worker.markDead() {
 		return
 	}
+	metrics.WorkerStopsTotal.Inc()
 	if worker.cmd.Process != nil {
 		_ = worker.cmd.Process.Kill()
 	}
@@ -346,6 +350,7 @@ leased:
 		p.terminate(worker)
 		return nil, err
 	case <-timer.C:
+		metrics.WorkerTimeoutsTotal.Inc()
 		p.terminate(worker)
 		return nil, fmt.Errorf("worker %d timed out after %s", worker.ID, timeoutDuration)
 	}

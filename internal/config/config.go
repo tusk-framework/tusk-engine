@@ -17,6 +17,7 @@ type Config struct {
 	Port    int           `json:"port"`
 	Address string        `json:"address"`
 	Control ControlConfig `json:"control"`
+	Metrics MetricsConfig `json:"metrics"`
 	Runtime RuntimeConfig `json:"runtime"`
 
 	// Worker configuration
@@ -63,6 +64,22 @@ type ControlConfig struct {
 	Address string `json:"address"`
 	Port    int    `json:"port"`
 	Token   string `json:"token"`
+}
+
+// MetricsConfig configures RoadRunner's Prometheus scrape endpoint.
+// The endpoint is loopback-only by design; expose it through an authenticated
+// monitoring gateway when a remote scraper is required.
+type MetricsConfig struct {
+	Enabled bool   `json:"enabled"`
+	Address string `json:"address"`
+}
+
+// Validate checks that the metrics endpoint is safe to expose directly.
+func (c MetricsConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	return validateLoopbackTCPAddress("metrics address", c.Address, false)
 }
 
 // RuntimeConfig configures the Engine-managed RoadRunner lifecycle.
@@ -200,6 +217,9 @@ func DefaultConfig() *Config {
 			Address: "127.0.0.1",
 			Port:    9091,
 		},
+		Metrics: MetricsConfig{
+			Address: "127.0.0.1:2112",
+		},
 		Runtime: RuntimeConfig{
 			StatusAddress:  defaultRuntimeStatusAddress,
 			RPCAddress:     defaultRuntimeRPCAddress,
@@ -274,6 +294,12 @@ func loadConfigFromDir(root string) (*Config, error) {
 	}
 
 	mergeConfig(cfg, overlay)
+	if _, present := raw["control"]; present {
+		cfg.Control = overlay.Control
+	}
+	if _, present := raw["metrics"]; present {
+		cfg.Metrics = overlay.Metrics
+	}
 	cfg.Scripts = mergeScripts(composerScripts, overlay.Scripts)
 
 	if cfg.ProjectRoot == "" || cfg.ProjectRoot == "." || cfg.ProjectRoot == "./" {
@@ -354,6 +380,9 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("request limits must be positive")
 	}
 	if err := cfg.Runtime.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Metrics.Validate(); err != nil {
 		return err
 	}
 	return nil

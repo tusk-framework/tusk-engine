@@ -36,6 +36,17 @@ func TestDefaultConfigUsesDisabledLoopbackControl(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigDisablesPrometheusEndpoint(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Metrics.Enabled {
+		t.Fatal("metrics endpoint must be disabled by default")
+	}
+	if cfg.Metrics.Address != "127.0.0.1:2112" {
+		t.Fatalf("metrics address = %q, want 127.0.0.1:2112", cfg.Metrics.Address)
+	}
+}
+
 func TestDefaultConfigUsesLoopbackRuntimeDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -142,6 +153,38 @@ func TestControlConfigValidation(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestMetricsConfigValidationRejectsRemoteEndpoint(t *testing.T) {
+	cfg := MetricsConfig{Enabled: true, Address: "0.0.0.0:2112"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "metrics address") {
+		t.Fatalf("Validate() error = %v, want metrics address error", err)
+	}
+}
+
+func TestLoadConfigMergesControlAndMetricsSettings(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{
+  "control": {
+    "enabled": true,
+    "port": 9191
+  },
+  "metrics": {
+    "enabled": true,
+    "address": "127.0.0.1:9211"
+  }
+}`)
+
+	cfg, err := loadConfigFromDir(root)
+	if err != nil {
+		t.Fatalf("loadConfigFromDir() error = %v", err)
+	}
+	if !cfg.Control.Enabled || cfg.Control.Port != 9191 {
+		t.Fatalf("control settings were not loaded: %+v", cfg.Control)
+	}
+	if !cfg.Metrics.Enabled || cfg.Metrics.Address != "127.0.0.1:9211" {
+		t.Fatalf("metrics settings were not loaded: %+v", cfg.Metrics)
 	}
 }
 

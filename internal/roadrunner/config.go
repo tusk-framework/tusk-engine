@@ -9,12 +9,13 @@ import (
 )
 
 type fileConfig struct {
-	Version string       `yaml:"version"`
-	Server  serverConfig `yaml:"server"`
-	HTTP    httpConfig   `yaml:"http"`
-	Status  statusConfig `yaml:"status"`
-	RPC     rpcConfig    `yaml:"rpc"`
-	Logs    logsConfig   `yaml:"logs"`
+	Version string         `yaml:"version"`
+	Server  serverConfig   `yaml:"server"`
+	HTTP    httpConfig     `yaml:"http"`
+	Status  statusConfig   `yaml:"status"`
+	RPC     rpcConfig      `yaml:"rpc"`
+	Logs    logsConfig     `yaml:"logs"`
+	Metrics *metricsConfig `yaml:"metrics,omitempty"`
 }
 
 type serverConfig struct {
@@ -25,6 +26,7 @@ type serverConfig struct {
 type httpConfig struct {
 	Address        string     `yaml:"address"`
 	MaxRequestSize int64      `yaml:"max_request_size"`
+	Middleware     []string   `yaml:"middleware,omitempty"`
 	Pool           poolConfig `yaml:"pool"`
 }
 
@@ -54,6 +56,10 @@ type rpcConfig struct {
 	Listen string `yaml:"listen"`
 }
 
+type metricsConfig struct {
+	Address string `yaml:"address"`
+}
+
 // Project renders the canonical Tusk configuration as a RoadRunner v3 file.
 func Project(cfg *config.Config) ([]byte, error) {
 	if cfg == nil {
@@ -75,6 +81,9 @@ func Project(cfg *config.Config) ([]byte, error) {
 		return nil, fmt.Errorf("php_binary is required")
 	}
 	if err := cfg.Runtime.Validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Metrics.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -110,6 +119,10 @@ func Project(cfg *config.Config) ([]byte, error) {
 			Mode:  "production",
 			Level: "warn",
 		},
+	}
+	if cfg.Metrics.Enabled {
+		projected.HTTP.Middleware = []string{"http_metrics"}
+		projected.Metrics = &metricsConfig{Address: cfg.Metrics.Address}
 	}
 
 	return yaml.Marshal(projected)

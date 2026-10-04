@@ -159,6 +159,10 @@ The control API is disabled by default and does not change the public traffic se
         "enabled": true,
         "address": "127.0.0.1",
         "port": 9091
+    },
+    "metrics": {
+        "enabled": true,
+        "address": "127.0.0.1:2112"
     }
 }
 ```
@@ -168,9 +172,24 @@ When enabled, the engine exposes:
 - `GET /v1/healthz` — process health; returns `200` during startup and graceful shutdown.
 - `GET /v1/readyz` — RoadRunner readiness; returns `200` only after its status plugin reports an HTTP worker ready.
 - `GET /v1/metadata` — safe engine and runtime metadata.
-- `GET /v1/metrics` — Prometheus metrics.
+- `GET /v1/metrics` — Engine and native-runtime Prometheus metrics.
 
 The default loopback binding does not require a token. If `address` is non-loopback, configure a non-empty `token`; every control endpoint then requires `Authorization: Bearer <token>`. Do not expose the control API publicly without a network policy and secret management appropriate for your deployment.
+
+RoadRunner request and worker metrics are opt-in because its Prometheus listener is a
+separate endpoint. Set `metrics.enabled` to `true` to enable the loopback-only
+`http://127.0.0.1:2112/metrics` scrape endpoint. Tusk then renders RoadRunner's
+`http_metrics` middleware, which supplies bounded method/status/duration request
+metrics plus worker state and queue-depth metrics. The metrics listener rejects
+non-loopback addresses; use an authenticated monitoring gateway or local scrape
+agent when metrics must be collected remotely. The endpoint is disabled by default.
+
+The legacy native runtime also publishes bounded `tusk_worker_starts_total`,
+`tusk_worker_stops_total`, `tusk_worker_crashes_total`,
+`tusk_worker_timeouts_total`, and `tusk_worker_queue_depth` collectors through
+the control registry. RoadRunner remains the source of truth for the default
+runtime's worker lifecycle and queue metrics, avoiding a second worker-pool
+implementation in the Engine.
 
 ### 3. Manage Dependencies with Composer
 ```bash
