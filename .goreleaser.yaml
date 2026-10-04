@@ -15,6 +15,12 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/tusk-framework/tusk-engine/internal/toolchain.officialCatalogTrustAnchorsB64={{ .Env.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
 
 archives:
   - format: tar.gz
@@ -33,6 +39,11 @@ archives:
 
 checksum:
   name_template: 'checksums.txt'
+
+release:
+  extra_files:
+    - glob: release/toolchain-catalog.json
+    - glob: release/toolchain-catalog.provenance.json
 
 snapshot:
   name_template: "{{ incpatch .Version }}-next"
