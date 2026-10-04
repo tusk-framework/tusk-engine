@@ -1,8 +1,12 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
+	"net"
+	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -153,5 +157,62 @@ func TestDisabledControlDoesNotExposeRoutes(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/v1/healthz", nil))
 	if recorder.Code != 404 {
 		t.Fatalf("disabled status = %d, want 404", recorder.Code)
+	}
+}
+
+func TestServerBindsBeforeReportingReadyAndStops(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve control port: %v", err)
+	}
+	port := reserved.Addr().(*net.TCPAddr).Port
+	if err := reserved.Close(); err != nil {
+		t.Fatalf("release control port: %v", err)
+	}
+
+	server, err := NewServer(
+		config.ControlConfig{Enabled: true, Address: "127.0.0.1", Port: port},
+		fakeProvider{snapshot: readySnapshot()},
+		Metadata{EngineName: "tusk-engine", Version: "0.1.0"},
+	)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Start()
+	}()
+
+	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	if err := server.WaitReady(readyContext); err != nil {
+		cancelReady()
+		t.Fatalf("WaitReady() error = %v", err)
+	}
+	cancelReady()
+
+	response, err := http.Get("http://127.0.0.1:" + strconv.Itoa(port) + "/v1/readyz")
+	if err != nil {
+		t.Fatalf("GET /v1/readyz: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 200 {
+		t.Fatalf("ready status = %d, want 200", response.StatusCode)
+	}
+
+	stopContext, cancelStop := context.WithTimeout(context.Background(), time.Second)
+	if err := server.Stop(stopContext); err != nil {
+		cancelStop()
+		t.Fatalf("Stop() error = %v", err)
+	}
+	cancelStop()
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop")
 	}
 }

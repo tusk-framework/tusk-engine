@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -19,7 +20,10 @@ type Server struct {
 	cfg      config.ControlConfig
 	provider SnapshotProvider
 	metadata Metadata
+	mu       sync.Mutex
 	http     *http.Server
+	ready    chan struct{}
+	startErr chan error
 }
 
 func NewServer(cfg config.ControlConfig, provider SnapshotProvider, metadata Metadata) (*Server, error) {
@@ -37,6 +41,8 @@ func NewServer(cfg config.ControlConfig, provider SnapshotProvider, metadata Met
 		cfg:      cfg,
 		provider: provider,
 		metadata: metadata,
+		ready:    make(chan struct{}),
+		startErr: make(chan error, 1),
 	}, nil
 }
 
@@ -61,22 +67,46 @@ func (s *Server) Start() error {
 	address := net.JoinHostPort(s.cfg.Address, strconv.Itoa(s.cfg.Port))
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
+		s.startErr <- err
 		return err
 	}
 
-	s.http = &http.Server{Handler: s.Handler()}
-	err = s.http.Serve(listener)
+	server := &http.Server{Handler: s.Handler()}
+	s.mu.Lock()
+	s.http = server
+	s.mu.Unlock()
+	close(s.ready)
+
+	err = server.Serve(listener)
 	if err == http.ErrServerClosed {
 		return nil
 	}
 	return err
 }
 
-func (s *Server) Stop(ctx context.Context) error {
-	if s.http == nil {
+func (s *Server) WaitReady(ctx context.Context) error {
+	if !s.cfg.Enabled {
 		return nil
 	}
-	return s.http.Shutdown(ctx)
+
+	select {
+	case <-s.ready:
+		return nil
+	case err := <-s.startErr:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Server) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	server := s.http
+	s.mu.Unlock()
+	if server == nil {
+		return nil
+	}
+	return server.Shutdown(ctx)
 }
 
 func (s *Server) protected(next http.Handler) http.Handler {
