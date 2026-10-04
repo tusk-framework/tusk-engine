@@ -18,7 +18,7 @@ func TestExecProcessFactoryPropagatesSpecAndSupportsReload(t *testing.T) {
 	factory := ExecProcessFactory{Stdout: io.Discard, Stderr: io.Discard}
 	process, err := factory.Start(ProcessSpec{
 		Binary:     "sh",
-		Args:       []string{"-c", "sleep 1"},
+		Args:       []string{"-c", "trap 'exit 0' INT; sleep 10"},
 		ReloadArgs: []string{"-c", "true"},
 		Dir:        t.TempDir(),
 	})
@@ -28,7 +28,7 @@ func TestExecProcessFactoryPropagatesSpecAndSupportsReload(t *testing.T) {
 	if err := process.Reload(); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := process.GracefulStop(ctx); err != nil {
 		t.Fatalf("GracefulStop() error = %v", err)
