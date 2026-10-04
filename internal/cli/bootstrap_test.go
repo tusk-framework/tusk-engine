@@ -180,9 +180,9 @@ func main() {
 	return binary
 }
 
-func TestStartRejectsPositionalWorkerWithoutUnavailableMigrationCommand(t *testing.T) {
+func TestStartRejectsPositionalWorker(t *testing.T) {
 	for _, command := range []string{"start", "dev"} {
-		if err := validateStartArgs([]string{"file.php"}); err == nil || !strings.Contains(err.Error(), "bootstrap/app.php") || strings.Contains(err.Error(), "tusk migrate") {
+		if err := validateStartArgs([]string{"file.php"}); err == nil || !strings.Contains(err.Error(), "bootstrap/app.php") {
 			t.Fatalf("%s custom worker error = %v", command, err)
 		}
 	}
@@ -202,7 +202,7 @@ func TestStartRejectsLegacyRootWorkerEvenWithBootstrap(t *testing.T) {
 		t.Fatal("RoadRunner resolved before legacy worker rejection")
 		return toolchain.Tool{}, nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "legacy") || !strings.Contains(err.Error(), "worker.php") || strings.Contains(err.Error(), "tusk migrate") {
+	if err == nil || !strings.Contains(err.Error(), "legacy") || !strings.Contains(err.Error(), "worker.php") || !strings.Contains(err.Error(), "tusk migrate") {
 		t.Fatalf("legacy worker error = %v", err)
 	}
 	if factory.started {
@@ -242,7 +242,7 @@ func TestStartReportsLegacyRootWorkerWithoutBootstrap(t *testing.T) {
 		t.Fatal("RoadRunner resolved before bootstrap validation")
 		return toolchain.Tool{}, nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "worker.php") || strings.Contains(err.Error(), "tusk migrate") || factory.started {
+	if err == nil || !strings.Contains(err.Error(), "worker.php") || !strings.Contains(err.Error(), "tusk migrate") || factory.started {
 		t.Fatalf("legacy project result = %v, started = %t", err, factory.started)
 	}
 }
