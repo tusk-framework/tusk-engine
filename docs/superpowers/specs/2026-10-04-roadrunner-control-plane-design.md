@@ -194,10 +194,13 @@ the control API reporting ready.
 
 ## Configuration contract
 
-The existing canonical Tusk configuration remains the source of application
-settings. The integration may add only explicit runtime lifecycle settings
-needed to avoid port collisions and configure bounded probe behavior. New
-settings must have loopback-safe defaults and deterministic validation.
+The canonical configuration has explicit ownership boundaries: `tusk.json`
+owns Engine and platform settings, while `config/*.php` owns application
+settings. `composer.json` remains the authority for Composer dependencies,
+metadata, autoloading, scripts, and its lockfile. The integration may add only
+explicit runtime lifecycle settings to `tusk.json` as needed to avoid port
+collisions and configure bounded probe behavior. New settings must have
+loopback-safe defaults and deterministic validation.
 
 The runtime settings are grouped under a RuntimeConfig value and include:
 
