@@ -125,33 +125,7 @@ var officialCatalogTrustAnchorsB64 string
 // released catalog. Public keys are configuration, never private signing
 // material, and can contain multiple IDs during key rotation overlap.
 func OfficialCatalogVerifier() (CatalogVerifier, error) {
-	if strings.TrimSpace(officialCatalogTrustAnchorsB64) == "" {
-		return CatalogVerifier{}, errors.New("official catalog trust anchor is not configured")
-	}
-	data, err := base64.StdEncoding.DecodeString(officialCatalogTrustAnchorsB64)
-	if err != nil {
-		return CatalogVerifier{}, fmt.Errorf("decode official catalog trust anchor: %w", err)
-	}
-	var document struct {
-		Keys map[string]string `json:"keys"`
-	}
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&document); err != nil {
-		return CatalogVerifier{}, fmt.Errorf("decode official catalog trust anchor: %w", err)
-	}
-	if len(document.Keys) == 0 {
-		return CatalogVerifier{}, errors.New("official catalog trust anchor contains no keys")
-	}
-	keys := make(map[string]ed25519.PublicKey, len(document.Keys))
-	for keyID, encoded := range document.Keys {
-		publicKey, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil || len(publicKey) != ed25519.PublicKeySize {
-			return CatalogVerifier{}, fmt.Errorf("official catalog trust anchor key %q is invalid", keyID)
-		}
-		keys[keyID] = ed25519.PublicKey(publicKey)
-	}
-	return CatalogVerifier{PublicKeys: keys, RequireValidity: true}, nil
+	return CatalogVerifierFromTrustAnchorsB64(officialCatalogTrustAnchorsB64)
 }
 
 func LoadOfficialCatalog(path string) (CatalogPayload, error) {
