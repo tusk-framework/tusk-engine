@@ -164,3 +164,28 @@ func TestRegistryRejectsDuplicateNames(t *testing.T) {
 		t.Fatal("NewRegistry() returned a registry after duplicate registration")
 	}
 }
+
+func TestRegistryRejectsUnknownConfigurationBeforeCreatingProviders(t *testing.T) {
+	descriptor := validDescriptor()
+	created := 0
+	registry, err := NewRegistry(Registration{
+		Descriptor: descriptor,
+		New: func() (Provider, error) {
+			created++
+			return &registryProvider{descriptor: descriptor}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = registry.Activate(context.Background(), map[string]Configuration{
+		"unknown-component": {"enabled": true},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown component") {
+		t.Fatalf("Activate() error = %v, want unknown component error", err)
+	}
+	if created != 0 || registry.Ready() {
+		t.Fatalf("unknown config created=%d ready=%v", created, registry.Ready())
+	}
+}
