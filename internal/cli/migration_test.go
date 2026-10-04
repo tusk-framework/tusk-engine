@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,26 @@ func TestDoctorRecognizesModernBootstrap(t *testing.T) {
 	err := runDoctorToWith(&config.Config{ProjectRoot: root}, nil, &output, func(*config.Config) (toolchain.Report, error) { return toolchain.Report{}, nil })
 	if err != nil || strings.Contains(strings.ToLower(output.String()), "legacy") {
 		t.Fatalf("doctor = %q, %v", output.String(), err)
+	}
+}
+
+func TestDoctorReportsProjectDiagnosisWhenToolchainDiagnosisFails(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "worker.php"), []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	diagnoseErr := fmt.Errorf("parse toolchain manifest: malformed JSON")
+	err := runDoctorToWith(&config.Config{ProjectRoot: root}, nil, &output, func(*config.Config) (toolchain.Report, error) {
+		return toolchain.Report{}, diagnoseErr
+	})
+	if err == nil || !strings.Contains(err.Error(), "malformed JSON") {
+		t.Fatalf("doctor error = %v", err)
+	}
+	for _, value := range []string{"toolchain", "worker.php", "tusk migrate"} {
+		if !strings.Contains(output.String(), value) {
+			t.Fatalf("doctor output missing %q: %s", value, output.String())
+		}
 	}
 }
 

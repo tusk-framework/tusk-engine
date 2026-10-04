@@ -215,19 +215,21 @@ func runDoctorToWith(cfg *config.Config, args []string, output io.Writer, diagno
 		return err
 	}
 	report, err := diagnose(cfg)
-	if err != nil {
-		return err
-	}
+	diagnoseErr := err
 	project, err := migration.Detect(cfg.ProjectRoot)
 	if err != nil {
+		if diagnoseErr != nil {
+			return errors.Join(diagnoseErr, err)
+		}
 		return err
 	}
 
 	if jsonOutput {
 		data, err := json.MarshalIndent(struct {
 			toolchain.Report
-			Project migration.Detection `json:"project"`
-		}{report, project}, "", "  ")
+			Project        migration.Detection `json:"project"`
+			ToolchainError string              `json:"toolchain_error,omitempty"`
+		}{report, project, errorString(diagnoseErr)}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encode toolchain report: %w", err)
 		}
@@ -244,6 +246,9 @@ func runDoctorToWith(cfg *config.Config, args []string, output io.Writer, diagno
 		}
 		_, _ = fmt.Fprintf(output, "%-10s %-17s %s\n", tool.Name, tool.Status, tool.Error)
 	}
+	if diagnoseErr != nil {
+		_, _ = fmt.Fprintf(output, "\nToolchain diagnosis error: %v\n", diagnoseErr)
+	}
 	if report.Ready {
 		_, err = fmt.Fprintln(output, "\nToolchain is ready.")
 	} else {
@@ -252,7 +257,18 @@ func runDoctorToWith(cfg *config.Config, args []string, output io.Writer, diagno
 	if err != nil {
 		return err
 	}
-	return writeProjectDiagnosis(output, project)
+	projectErr := writeProjectDiagnosis(output, project)
+	if diagnoseErr != nil {
+		return errors.Join(diagnoseErr, projectErr)
+	}
+	return projectErr
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func runMigrateTo(cfg *config.Config, args []string, output io.Writer) error {

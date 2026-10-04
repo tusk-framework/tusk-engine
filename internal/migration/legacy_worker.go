@@ -50,7 +50,7 @@ func Detect(root string) (Detection, error) {
 		}
 		return Detection{Modern, "Modern bootstrap/app.php is present.", "Run tusk start after confirming the application bootstrap and dependencies."}, nil
 	}
-	return Detection{Missing, "No root worker.php or bootstrap/app.php was found; there is no application entrypoint to migrate.", "Run tusk init for a new project or add bootstrap/app.php manually, then run tusk doctor."}, nil
+	return Detection{Missing, "No root worker.php or bootstrap/app.php was found; there is no application entrypoint to migrate.", "Add bootstrap/app.php from the modern project skeleton (tusk init only creates tusk.json), then run tusk doctor."}, nil
 }
 
 type skeletonFile struct{ path, content string }
@@ -93,9 +93,40 @@ return static function (Router $router): void {
 	{"public/index.php", `<?php
 
 use Nyholm\Psr7\ServerRequest;
+use Nyholm\Psr7\UploadedFile;
 
 require __DIR__.'/../vendor/autoload.php';
 $application = require __DIR__.'/../bootstrap/app.php';
+$normalizeUpload = static function (array $file) use (&$normalizeUpload) {
+    $tmpName = $file['tmp_name'] ?? null;
+
+    if (is_array($tmpName)) {
+        $uploads = [];
+        foreach ($tmpName as $key => $nestedTmpName) {
+            $uploads[$key] = $normalizeUpload([
+                'name' => $file['name'][$key] ?? null,
+                'type' => $file['type'][$key] ?? null,
+                'tmp_name' => $nestedTmpName,
+                'error' => $file['error'][$key] ?? UPLOAD_ERR_NO_FILE,
+                'size' => $file['size'][$key] ?? 0,
+            ]);
+        }
+
+        return $uploads;
+    }
+
+    return new UploadedFile(
+        (string) ($tmpName ?? ''),
+        (int) ($file['size'] ?? 0),
+        (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE),
+        $file['name'] ?? null,
+        $file['type'] ?? null,
+    );
+};
+$uploadedFiles = [];
+foreach ($_FILES as $field => $file) {
+    $uploadedFiles[$field] = $normalizeUpload($file);
+}
 $request = new ServerRequest(
     $_SERVER['REQUEST_METHOD'] ?? 'GET',
     $_SERVER['REQUEST_URI'] ?? '/',
@@ -104,7 +135,10 @@ $request = new ServerRequest(
     '1.1',
     $_SERVER,
 );
-$request = $request->withParsedBody($_POST)->withCookieParams($_COOKIE);
+$request = $request
+    ->withParsedBody($_POST)
+    ->withCookieParams($_COOKIE)
+    ->withUploadedFiles($uploadedFiles);
 $response = $application->handle($request);
 http_response_code($response->getStatusCode());
 foreach ($response->getHeaders() as $name => $values) {
@@ -116,9 +150,42 @@ echo $response->getBody();
 `},
 }
 
+func validateProjectRoot(root string) error {
+	if strings.TrimSpace(root) == "" || root == "." || root == ".." || filepath.Clean(root) != root {
+		return fmt.Errorf("unsafe project root %q", root)
+	}
+	for _, part := range strings.Split(filepath.ToSlash(root), "/") {
+		if part == ".." {
+			return fmt.Errorf("project root contains traversal: %q", root)
+		}
+	}
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolve project root: %w", err)
+	}
+	if absoluteRoot == filepath.VolumeName(absoluteRoot)+string(filepath.Separator) {
+		return fmt.Errorf("project root must not be a volume root: %q", root)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(absoluteRoot)
+	if err != nil {
+		return fmt.Errorf("resolve project root symlinks: %w", err)
+	}
+	if filepath.Clean(resolvedRoot) != filepath.Clean(absoluteRoot) {
+		return fmt.Errorf("ambiguous project root %q", root)
+	}
+	rootInfo, err := os.Stat(absoluteRoot)
+	if err != nil || !rootInfo.IsDir() {
+		return fmt.Errorf("project root must be an existing directory: %q", root)
+	}
+	return nil
+}
+
 // Migrate creates only absent skeleton files. Any existing target is a conflict,
 // even if its contents resemble a generated template.
 func Migrate(root string) ([]string, error) {
+	if err := validateProjectRoot(root); err != nil {
+		return nil, err
+	}
 	detection, err := Detect(root)
 	if err != nil {
 		return nil, err
