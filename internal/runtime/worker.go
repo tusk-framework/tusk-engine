@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,10 +32,34 @@ type WorkerFile struct {
 	RelativePath string
 	ownedPath    string
 	identity     os.FileInfo
+	directory    workerDirectory
+}
+
+type workerDirectory interface {
+	CreateTemp() (*os.File, string, error)
+	Publish(string) error
+	MoveToQuarantine() (string, error)
+	Restore(string) error
+	Remove(string) error
+	Stat(string) (os.FileInfo, error)
+	StillAtPath() bool
+	Close() error
+}
+
+type workerHooks struct {
+	beforeTemp        func()
+	beforePublish     func()
+	afterPublish      func()
+	beforeCleanupMove func()
+	afterCleanupMove  func()
 }
 
 // WriteWorker creates the private RoadRunner worker in the project runtime directory.
 func WriteWorker(root string) (WorkerFile, error) {
+	return writeWorkerWithHooks(root, workerHooks{})
+}
+
+func writeWorkerWithHooks(root string, hooks workerHooks) (WorkerFile, error) {
 	var zero WorkerFile
 	if strings.TrimSpace(root) == "" || root == "." || root == ".." || filepath.Clean(root) != root {
 		return zero, fmt.Errorf("unsafe project root %q", root)
@@ -62,29 +88,36 @@ func WriteWorker(root string) (WorkerFile, error) {
 		return zero, fmt.Errorf("project root must be an existing directory: %q", root)
 	}
 
-	tuskDir := filepath.Join(absoluteRoot, ".tusk")
-	runtimeDir := filepath.Join(tuskDir, "runtime")
-	for _, directory := range []string{tuskDir, runtimeDir} {
-		if err := os.Mkdir(directory, 0o700); err != nil && !os.IsExist(err) {
-			return zero, fmt.Errorf("create runtime directory %q: %w", directory, err)
-		}
-		info, err := os.Lstat(directory)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return zero, fmt.Errorf("unsafe runtime directory %q", directory)
-		}
+	directory, err := openWorkerDirectory(absoluteRoot)
+	if err != nil {
+		return zero, err
 	}
-	destination := filepath.Join(runtimeDir, "worker.php")
-	if _, err := os.Lstat(destination); err == nil {
-		return zero, fmt.Errorf("refuse to overwrite existing worker %q", destination)
-	} else if !os.IsNotExist(err) {
-		return zero, fmt.Errorf("inspect worker destination: %w", err)
+	keepDirectory := false
+	defer func() {
+		if !keepDirectory {
+			_ = directory.Close()
+		}
+	}()
+	if hooks.beforeTemp != nil {
+		hooks.beforeTemp()
 	}
-	temporary, err := os.CreateTemp(runtimeDir, ".worker-*.php")
+	if !directory.StillAtPath() {
+		return zero, fmt.Errorf("runtime directory moved before worker creation")
+	}
+	temporary, temporaryName, err := directory.CreateTemp()
 	if err != nil {
 		return zero, fmt.Errorf("create temporary worker: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	identity, err := temporary.Stat()
+	if err != nil {
+		_ = temporary.Close()
+		return zero, fmt.Errorf("inspect temporary worker: %w", err)
+	}
+	defer func() {
+		if current, statErr := directory.Stat(temporaryName); statErr == nil && os.SameFile(identity, current) {
+			_ = directory.Remove(temporaryName)
+		}
+	}()
 	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return zero, fmt.Errorf("restrict temporary worker: %w", err)
@@ -97,42 +130,102 @@ func WriteWorker(root string) (WorkerFile, error) {
 		_ = temporary.Close()
 		return zero, fmt.Errorf("sync temporary worker: %w", err)
 	}
-	identity, err := temporary.Stat()
-	if err != nil {
-		_ = temporary.Close()
-		return zero, fmt.Errorf("inspect temporary worker: %w", err)
-	}
 	if err := temporary.Close(); err != nil {
 		return zero, fmt.Errorf("close temporary worker: %w", err)
 	}
-	if err := os.Rename(temporaryPath, destination); err != nil {
-		return zero, fmt.Errorf("install worker: %w", err)
+	if hooks.beforePublish != nil {
+		hooks.beforePublish()
 	}
-	return WorkerFile{Path: destination, RelativePath: workerRelativePath, ownedPath: destination, identity: identity}, nil
+	if !directory.StillAtPath() {
+		return zero, fmt.Errorf("runtime directory moved before worker publication")
+	}
+	current, err := directory.Stat(temporaryName)
+	if err != nil || !os.SameFile(identity, current) {
+		return zero, fmt.Errorf("temporary worker was replaced before publication")
+	}
+	if err := directory.Publish(temporaryName); err != nil {
+		return zero, fmt.Errorf("publish worker without replacing an existing file: %w", err)
+	}
+	published, err := directory.Stat("worker.php")
+	if err != nil || !os.SameFile(identity, published) {
+		return zero, fmt.Errorf("published worker identity changed")
+	}
+	if hooks.afterPublish != nil {
+		hooks.afterPublish()
+	}
+	destination := filepath.Join(absoluteRoot, filepath.FromSlash(workerRelativePath))
+	worker := WorkerFile{Path: destination, RelativePath: workerRelativePath, ownedPath: destination, identity: identity, directory: directory}
+	if !directory.StillAtPath() {
+		_ = worker.Cleanup()
+		return zero, fmt.Errorf("runtime directory moved during worker publication")
+	}
+	keepDirectory = true
+	return worker, nil
 }
 
 // Cleanup removes only the file created by this WorkerFile value.
 func (f *WorkerFile) Cleanup() error {
+	return f.cleanupWithHooks(workerHooks{})
+}
+
+func (f *WorkerFile) cleanupWithHooks(hooks workerHooks) error {
 	if f == nil || f.identity == nil {
 		return nil
 	}
 	if f.Path != f.ownedPath || f.RelativePath != workerRelativePath {
 		return fmt.Errorf("refuse to remove non-owned worker %q", f.Path)
 	}
-	info, err := os.Lstat(f.Path)
+	current, err := f.directory.Stat("worker.php")
 	if os.IsNotExist(err) {
-		f.identity = nil
+		f.finishCleanup()
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("inspect generated worker: %w", err)
 	}
-	if !os.SameFile(f.identity, info) {
+	if !os.SameFile(f.identity, current) {
+		f.finishCleanup()
 		return fmt.Errorf("refuse to remove replaced worker %q", f.Path)
 	}
-	if err := os.Remove(f.Path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove generated worker: %w", err)
+	if hooks.beforeCleanupMove != nil {
+		hooks.beforeCleanupMove()
 	}
-	f.identity = nil
+	quarantine, err := f.directory.MoveToQuarantine()
+	if os.IsNotExist(err) {
+		f.finishCleanup()
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("move worker for ownership check: %w", err)
+	}
+	if hooks.afterCleanupMove != nil {
+		hooks.afterCleanupMove()
+	}
+	info, err := f.directory.Stat(quarantine)
+	if err != nil || !os.SameFile(f.identity, info) {
+		if restoreErr := f.directory.Restore(quarantine); restoreErr != nil {
+			return fmt.Errorf("worker was replaced; preserve moved file %q: %w", quarantine, restoreErr)
+		}
+		f.finishCleanup()
+		return fmt.Errorf("refuse to remove replaced worker %q", f.Path)
+	}
+	if err := f.directory.Remove(quarantine); err != nil {
+		return fmt.Errorf("remove owned worker: %w", err)
+	}
+	f.finishCleanup()
 	return nil
+}
+
+func (f *WorkerFile) finishCleanup() {
+	_ = f.directory.Close()
+	f.directory = nil
+	f.identity = nil
+}
+
+func randomWorkerName(prefix string) (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return prefix + hex.EncodeToString(nonce[:]), nil
 }
