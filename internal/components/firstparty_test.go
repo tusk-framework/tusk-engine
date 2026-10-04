@@ -15,6 +15,19 @@ func TestNewFuncServiceInvocationProviderRejectsNilHandler(t *testing.T) {
 	}
 }
 
+func TestServiceInvocationProvidersRejectMissingCapability(t *testing.T) {
+	descriptor := validDescriptor()
+	descriptor.Capabilities = []Capability{CapabilityResilience}
+	if _, err := NewFuncServiceInvocationProvider(descriptor, func(context.Context, InvocationRequest) (InvocationResponse, error) {
+		return InvocationResponse{}, nil
+	}); err == nil || !strings.Contains(err.Error(), "service.invocation") {
+		t.Fatalf("NewFuncServiceInvocationProvider() error = %v, want capability validation", err)
+	}
+	if _, err := NewHandlerServiceInvocationProvider(descriptor); err == nil || !strings.Contains(err.Error(), "service.invocation") {
+		t.Fatalf("NewHandlerServiceInvocationProvider() error = %v, want capability validation", err)
+	}
+}
+
 func TestFuncServiceInvocationProviderInvokesConfiguredHandler(t *testing.T) {
 	descriptor := validDescriptor()
 	wantErr := errors.New("handler error")
@@ -133,5 +146,36 @@ func TestResilienceProviderCreatesInvokerForSubstitutedProvider(t *testing.T) {
 	}
 	if _, err := invoker.Invoke(context.Background(), InvocationRequest{Idempotency: Idempotent}); err != nil {
 		t.Fatalf("Invoke() error = %v", err)
+	}
+}
+
+func TestHandlerServiceInvocationProviderCopiesCallerRequest(t *testing.T) {
+	descriptor := invocationDescriptor()
+	provider, err := NewHandlerServiceInvocationProvider(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Register("billing", func(_ context.Context, request InvocationRequest) (InvocationResponse, error) {
+		if len(request.Headers["X-Test"]) != 1 {
+			t.Fatalf("copied headers = %#v", request.Headers)
+		}
+		request.Body[0] = 'x'
+		request.Headers["X-Test"][0] = "changed"
+		return InvocationResponse{Status: 200}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte("body")
+	headers := map[string][]string{"X-Test": []string{"original"}}
+	if _, err := provider.Invoke(context.Background(), InvocationRequest{
+		Service: "billing",
+		Headers: headers,
+		Body:    body,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "body" || headers["X-Test"][0] != "original" {
+		t.Fatalf("caller request mutated: body=%q headers=%v", body, headers)
 	}
 }
