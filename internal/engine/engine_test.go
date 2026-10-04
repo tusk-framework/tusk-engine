@@ -209,10 +209,10 @@ func TestNewFromConfigActivatesFirstPartyComponentsBeforeControlFactory(t *testi
 	var descriptors []components.Descriptor
 	control := newRecordingControl(&events, nil)
 	engine, err := NewFromConfig(cfg, Options{
-		Runtime:             &recordingRuntime{events: &events},
-		Probe:               recordingProbe{},
-		ProbeInterval:       time.Millisecond,
-		StartupTimeout:      time.Second,
+		Runtime:        &recordingRuntime{events: &events},
+		Probe:          recordingProbe{},
+		ProbeInterval:  time.Millisecond,
+		StartupTimeout: time.Second,
 		ControlFactory: func(got []components.Descriptor) (ControlPlane, error) {
 			descriptors = got
 			return control, nil
@@ -240,9 +240,9 @@ func TestStartRejectsNilControlFactoryResult(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Control.Enabled = true
 	engine, err := NewFromConfig(cfg, Options{
-		Runtime: &recordingRuntime{events: &[]string{}},
-		Probe:   recordingProbe{},
-		ProbeInterval: time.Millisecond,
+		Runtime:        &recordingRuntime{events: &[]string{}},
+		Probe:          recordingProbe{},
+		ProbeInterval:  time.Millisecond,
 		StartupTimeout: time.Second,
 		ControlFactory: func([]components.Descriptor) (ControlPlane, error) {
 			return nil, nil

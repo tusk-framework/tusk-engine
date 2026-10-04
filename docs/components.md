@@ -1,15 +1,17 @@
 # Engine components
 
-The Engine activates its component registry before starting the control plane
-or RoadRunner. A malformed component configuration, provider factory failure,
-configuration failure, or startup health failure prevents serving and does not
-publish a partial registry.
+Tusk Engine activates registered components before it starts the control
+server or RoadRunner. Component configuration errors, provider construction
+errors, configuration errors, and startup health failures therefore fail
+`tusk start` before the Engine can serve traffic. Activation is atomic: a
+failed activation does not publish a partially configured registry.
 
 ## Configuration
 
-Add component settings to `tusk.json` under `components`. Component names and
-fields are schema-validated; unknown component names, unknown fields, wrong
-types, and out-of-range policy values fail startup.
+Component settings live under `components` in `tusk.json`. Component names
+and fields are validated against the registered `v1` schema. Unknown
+component names or fields fail startup; configuration values are never
+included in `/v1/metadata`.
 
 ```json
 {
@@ -19,40 +21,43 @@ types, and out-of-range policy values fail startup.
       "max_attempts": 3,
       "initial_backoff": "50ms",
       "max_backoff": "500ms",
-      "circuit_failure_threshold": 5,
-      "circuit_reset_timeout": "30s"
+      "failure_threshold": 3,
+      "reset_timeout": "30s"
     }
   }
 }
 ```
 
-The default resilience policy is bounded to a five-minute maximum deadline,
-five total attempts, and the existing circuit-breaker bounds. Retries apply
-only to inherently idempotent requests or requests carrying a non-empty
-idempotency key; unknown and non-idempotent requests are attempted once.
+Duration fields use Go duration syntax. Retry attempts count total provider
+calls and are bounded to five. Retries run only for inherently idempotent
+requests or requests carrying a provider-enforced idempotency key. Unknown
+and non-idempotent requests run once. The deadline bounds the whole logical
+invocation, including retries and backoff. The circuit breaker counts one
+logical failed invocation, fails fast while open, and permits one half-open
+probe after its reset timeout.
 
 ## First-party providers
 
 The default registry includes:
 
-- `in-process-service-invocation`, a transport-free handler provider. Code can
-  register a handler for a service name and use the stable
-  `ServiceInvocationProvider` contract. It does not add HTTP, gRPC, or another
-  network transport.
-- `default-resilience`, which validates policy configuration and creates the
-  existing deadline/retry/circuit `Invoker` for a substituted invocation
-  provider.
+- `in-process-service-invocation`, which implements the service-invocation
+  contract with registered Go handlers. It intentionally does not choose an
+  HTTP, gRPC, or other network transport. A missing handler returns a stable
+  unavailable error.
+- `default-resilience`, which validates the bounded invocation policy and
+  constructs the existing deadline/retry/circuit-breaker invoker for any
+  compatible service-invocation provider.
 
-Integrations can supply a replacement registration with the same capability
-contract through Engine construction. Registration remains factory-based, so
-providers are configured and health-checked as one atomic activation.
+Provider factories are explicit registry registrations. Applications and
+tests can substitute a provider while retaining the same capability contract;
+application code does not need to depend on a concrete provider type.
 
 ## Control metadata
 
-When enabled, `GET /v1/metadata` exposes component descriptors only: names,
-versions, schema declarations, capabilities, health behavior, and declared
-secret field names. Configuration values, secret values, handler maps, policy
-instances, and provider internals are never serialized.
+When enabled, `/v1/metadata` exposes component descriptors only: name,
+implementation version, schema version, capabilities, health behavior, and
+declared secret field names. It does not expose component configuration,
+secret values, handler maps, resilience policy values, or provider internals.
 
-Actors, cluster scheduling, placement, distributed coordination, and network
-transport providers are intentionally deferred to later work.
+Actors, cluster scheduling, placement, distributed coordination, dynamic
+plugins, and network transports are deferred to later component-model work.

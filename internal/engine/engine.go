@@ -151,6 +151,10 @@ func (e *Engine) Start(ctx context.Context) (<-chan error, error) {
 				e.finishFailedStart()
 				return nil, fmt.Errorf("create control plane: %w", err)
 			}
+			if controlPlane == nil {
+				e.finishFailedStart()
+				return nil, errors.New("create control plane: factory returned nil control plane")
+			}
 			e.mu.Lock()
 			e.control = controlPlane
 			e.mu.Unlock()
@@ -193,7 +197,9 @@ func (e *Engine) Start(ctx context.Context) (<-chan error, error) {
 }
 
 func (e *Engine) Snapshot() control.RuntimeSnapshot {
-	if provider, ok := e.runtime.(interface{ Snapshot() control.RuntimeSnapshot }); ok {
+	if provider, ok := e.runtime.(interface {
+		Snapshot() control.RuntimeSnapshot
+	}); ok {
 		return provider.Snapshot()
 	}
 	return control.RuntimeSnapshot{}

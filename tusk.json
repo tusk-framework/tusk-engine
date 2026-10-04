@@ -1,5 +1,15 @@
 {
     "port": 9090,
     "worker_count": 8,
-    "address": "127.0.0.1"
+    "address": "127.0.0.1",
+    "components": {
+        "default-resilience": {
+            "deadline": "5s",
+            "max_attempts": 3,
+            "initial_backoff": "50ms",
+            "max_backoff": "500ms",
+            "failure_threshold": 3,
+            "reset_timeout": "30s"
+        }
+    }
 }
