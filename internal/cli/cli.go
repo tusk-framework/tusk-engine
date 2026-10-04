@@ -69,19 +69,19 @@ func Run(args []string) {
 	case "toolchain":
 		runToolchainCommand(cfg, args[2:])
 	case "install":
-		runInstall(args[2:])
+		runInstall(cfg, args[2:])
 	case "add":
 		if len(args) < 3 {
 			log.Fatalf("Usage: tusk add <package>")
 		}
-		runAdd(args[2:])
+		runAdd(cfg, args[2:])
 	case "remove":
 		if len(args) < 3 {
 			log.Fatalf("Usage: tusk remove <package>")
 		}
-		runRemove(args[2:])
+		runRemove(cfg, args[2:])
 	case "update":
-		runUpdate(args[2:])
+		runUpdate(cfg, args[2:])
 	case "init":
 		runInit()
 	case "run":
@@ -506,17 +506,9 @@ func runInit() {
 }
 
 // runInstall installs PHP dependencies using composer
-func runInstall(args []string) {
+func runInstall(cfg *config.Config, args []string) {
 	fmt.Println("Installing PHP dependencies...")
-
-	// Check if composer is installed
-	if _, err := exec.LookPath("composer"); err != nil {
-		log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
-	}
-
-	// Run composer install
-	cmdArgs := append([]string{"install"}, args...)
-	cmd := exec.Command("composer", cmdArgs...)
+	cmd := composerCommand(cfg, append([]string{"install"}, args...))
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -529,17 +521,9 @@ func runInstall(args []string) {
 }
 
 // runAdd adds a PHP package
-func runAdd(packages []string) {
+func runAdd(cfg *config.Config, packages []string) {
 	fmt.Printf("Adding package(s): %s\n", strings.Join(packages, ", "))
-
-	// Check if composer is installed
-	if _, err := exec.LookPath("composer"); err != nil {
-		log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
-	}
-
-	// Run composer require
-	cmdArgs := append([]string{"require"}, packages...)
-	cmd := exec.Command("composer", cmdArgs...)
+	cmd := composerCommand(cfg, append([]string{"require"}, packages...))
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -552,17 +536,9 @@ func runAdd(packages []string) {
 }
 
 // runRemove removes a PHP package
-func runRemove(packages []string) {
+func runRemove(cfg *config.Config, packages []string) {
 	fmt.Printf("Removing package(s): %s\n", strings.Join(packages, ", "))
-
-	// Check if composer is installed
-	if _, err := exec.LookPath("composer"); err != nil {
-		log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
-	}
-
-	// Run composer remove
-	cmdArgs := append([]string{"remove"}, packages...)
-	cmd := exec.Command("composer", cmdArgs...)
+	cmd := composerCommand(cfg, append([]string{"remove"}, packages...))
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -575,21 +551,14 @@ func runRemove(packages []string) {
 }
 
 // runUpdate updates PHP dependencies
-func runUpdate(packages []string) {
+func runUpdate(cfg *config.Config, packages []string) {
 	if len(packages) == 0 {
 		fmt.Println("Updating all PHP dependencies...")
 	} else {
 		fmt.Printf("Updating package(s): %s\n", strings.Join(packages, ", "))
 	}
 
-	// Check if composer is installed
-	if _, err := exec.LookPath("composer"); err != nil {
-		log.Fatalf("Composer not found. Please install composer: https://getcomposer.org/")
-	}
-
-	// Run composer update
-	cmdArgs := append([]string{"update"}, packages...)
-	cmd := exec.Command("composer", cmdArgs...)
+	cmd := composerCommand(cfg, append([]string{"update"}, packages...))
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -599,4 +568,19 @@ func runUpdate(packages []string) {
 	}
 
 	fmt.Println("Dependencies updated successfully!")
+}
+
+func composerCommand(cfg *config.Config, args []string) *exec.Cmd {
+	report, err := defaultDiagnose(cfg)
+	if err != nil {
+		log.Fatalf("Unable to resolve Composer toolchain: %v", err)
+	}
+	cmd, err := buildToolchainCommand(cfg, report, toolchain.Composer, args)
+	if err != nil {
+		log.Fatalf("Unable to resolve Composer toolchain: %v", err)
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd
 }
