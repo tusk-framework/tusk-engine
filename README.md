@@ -15,6 +15,7 @@ The embedded native HTTP/NDJSON server is a frozen migration-era implementation 
 - **Dynamic Config**: Automatically loads settings from `tusk.json` or `composer.json`.
 - **Process Management**: Supervises the RoadRunner process and reports runtime failures.
 - **Control API**: Optional, versioned health, readiness, metadata, and Prometheus endpoints for local operations.
+- **Component model**: Activates versioned, replaceable service-invocation and resilience providers before serving traffic.
 
 ## Architecture
 
@@ -112,6 +113,18 @@ Create or edit `tusk.json` in your project root:
 
 Requests above the configured body or upload limits are rejected with HTTP 413. Static files are served only from `public/`; path traversal attempts are rejected. Scripts from `tusk.json` override scripts with the same name from `composer.json`, while non-conflicting scripts are merged.
 
+### Component model
+
+The Engine validates and activates configured components before starting
+RoadRunner or the control server. Add component settings under
+`"components"` in `tusk.json`; invalid names, fields, types, provider
+configuration, or startup health checks fail before traffic is served. The
+default registry provides the transport-free
+`in-process-service-invocation` contract and the bounded
+`default-resilience` provider. See [docs/components.md](docs/components.md)
+for configuration, idempotency, retry, deadline, circuit-breaker, metadata,
+and provider-substitution guidance.
+
 ### Toolchain diagnosis
 
 The Engine can inspect the exact PHP, Composer, and RoadRunner executables
@@ -191,6 +204,14 @@ The legacy native runtime also publishes bounded `tusk_worker_starts_total`,
 the control registry. RoadRunner remains the source of truth for the default
 runtime's worker lifecycle and queue metrics, avoiding a second worker-pool
 implementation in the Engine.
+
+### Engine components
+
+The Engine activates its versioned component registry before the control plane
+or RoadRunner starts. Configure validated, transport-free providers under the
+`components` object in `tusk.json`; see [Engine components](docs/components.md)
+for the default service-invocation and resilience providers, bounded retry and
+idempotency rules, provider substitution, and safe metadata behavior.
 
 ### 3. Manage Dependencies with Composer
 ```bash

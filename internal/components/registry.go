@@ -36,6 +36,16 @@ func (r *Registry) Activate(ctx context.Context, configurations map[string]Confi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	unknown := make([]string, 0)
+	for name := range configurations {
+		if _, registered := r.registrations[name]; !registered {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown component %q", unknown[0])
+	}
 	temporary := make(map[string]Provider, len(r.registrations))
 	names := make([]string, 0, len(r.registrations))
 	for name := range r.registrations {

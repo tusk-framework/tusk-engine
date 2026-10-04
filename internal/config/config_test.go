@@ -3,9 +3,12 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tusk-framework/tusk-engine/internal/components"
 )
 
 func TestDefaultConfigHasSafeRequestLimits(t *testing.T) {
@@ -184,6 +187,81 @@ func TestLoadConfigMergesControlAndMetricsSettings(t *testing.T) {
 	}
 	if cfg.Runtime.MetricsAddress != "127.0.0.1:9211" {
 		t.Fatalf("metrics settings were not loaded: %+v", cfg.Runtime)
+	}
+}
+
+func TestDefaultConfigHasNoComponentOverrides(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Components != nil {
+		t.Fatalf("Components = %#v, want nil until configured", cfg.Components)
+	}
+}
+
+func TestLoadConfigMergesComponentOverrides(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{
+  "components": {
+    "tusk.resilience": {
+      "deadline": "2s",
+      "max_attempts": 4,
+      "token": "top-secret"
+    }
+  }
+}`)
+
+	cfg, err := loadConfigFromDir(root)
+	if err != nil {
+		t.Fatalf("loadConfigFromDir() error = %v", err)
+	}
+	resilience := cfg.Components["tusk.resilience"]
+	if resilience["deadline"] != "2s" || resilience["max_attempts"] != float64(4) || resilience["token"] != "top-secret" {
+		t.Fatalf("component configuration = %#v, want decoded overrides", resilience)
+	}
+}
+
+func TestLoadConfigRejectsNonObjectComponentConfiguration(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{
+  "components": {
+    "tusk.resilience": "not-an-object"
+  }
+}`)
+
+	if _, err := loadConfigFromDir(root); err == nil || !strings.Contains(err.Error(), "parse tusk.json") {
+		t.Fatalf("loadConfigFromDir() error = %v, want component JSON parse failure", err)
+	}
+}
+
+func TestLoadConfigLoadsAndCopiesComponentConfiguration(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{
+  "components": {
+    "default-resilience": {
+      "deadline": "5s",
+      "max_attempts": 3
+    }
+  }
+}`)
+
+	cfg, err := loadConfigFromDir(root)
+	if err != nil {
+		t.Fatalf("loadConfigFromDir() error = %v", err)
+	}
+	want := components.Configuration{"deadline": "5s", "max_attempts": float64(3)}
+	if !reflect.DeepEqual(cfg.Components["default-resilience"], want) {
+		t.Fatalf("component config = %#v, want %#v", cfg.Components["default-resilience"], want)
+	}
+
+	overlay := &Config{Components: map[string]components.Configuration{
+		"default-resilience": {"nested": map[string]any{"value": "original"}},
+	}}
+	merged := DefaultConfig()
+	mergeConfig(merged, overlay)
+	mutated := overlay.Components["default-resilience"]["nested"].(map[string]any)
+	mutated["value"] = "changed"
+	if got := merged.Components["default-resilience"]["nested"].(map[string]any)["value"]; got != "original" {
+		t.Fatalf("merged component config shares nested map, got %v", got)
 	}
 }
 

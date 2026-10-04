@@ -15,8 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tusk-framework/tusk-engine/internal/components"
 	"github.com/tusk-framework/tusk-engine/internal/config"
 	"github.com/tusk-framework/tusk-engine/internal/control"
+	engine "github.com/tusk-framework/tusk-engine/internal/engine"
 	"github.com/tusk-framework/tusk-engine/internal/metrics"
 	"github.com/tusk-framework/tusk-engine/internal/php"
 	"github.com/tusk-framework/tusk-engine/internal/roadrunner"
@@ -313,6 +315,10 @@ func runServerWithConfig(cfg *config.Config) error {
 	if err := cfg.Runtime.Validate(); err != nil {
 		return fmt.Errorf("invalid runtime configuration: %w", err)
 	}
+	registry, err := newComponentRegistry()
+	if err != nil {
+		return fmt.Errorf("initialize component registry: %w", err)
+	}
 
 	resolved, err := toolchain.ResolveExecutable(cfg.ProjectRoot, toolchain.RoadRunner)
 	if err != nil {
@@ -339,55 +345,39 @@ func runServerWithConfig(cfg *config.Config) error {
 		},
 	)
 	metricsHandler := metrics.NewHandler("http://" + cfg.Runtime.MetricsAddress + "/metrics")
-	controlServer, err := control.NewServer(cfg.Control, manager, control.Metadata{
-		EngineName:     "tusk-engine",
-		Version:        "0.1.0",
-		GoVersion:      runtime.Version(),
-		OS:             runtime.GOOS,
-		Arch:           runtime.GOARCH,
-		WorkerCount:    cfg.WorkerCount,
-		TimeoutSeconds: cfg.Timeout,
-		Capabilities:   []string{"roadrunner", "persistent-workers", "metrics"},
-	}, metricsHandler)
+	controlFactory := func(descriptors []components.Descriptor) (engine.ControlPlane, error) {
+		return control.NewServer(cfg.Control, manager, control.Metadata{
+			EngineName:     "tusk-engine",
+			Version:        "0.1.0",
+			GoVersion:      runtime.Version(),
+			OS:             runtime.GOOS,
+			Arch:           runtime.GOARCH,
+			WorkerCount:    cfg.WorkerCount,
+			TimeoutSeconds: cfg.Timeout,
+			Capabilities:   []string{"roadrunner", "persistent-workers", "metrics"},
+			Components:     descriptors,
+		}, metricsHandler)
+	}
+	app, err := engine.NewFromConfig(cfg, engine.Options{
+		Registry:            registry,
+		Runtime:             manager,
+		Probe:               engineRuntime.NewHTTPReadinessProbe(cfg.Runtime.StatusAddress),
+		ProbeInterval:       cfg.Runtime.ProbeInterval,
+		StartupTimeout:      cfg.Runtime.StartupTimeout,
+		ControlFactory:      controlFactory,
+		ControlReadyTimeout: 5 * time.Second,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to initialize control server: %w", err)
+		return err
 	}
-
-	var controlErr <-chan error
-	if cfg.Control.Enabled {
-		controlError := make(chan error, 1)
-		controlErr = controlError
-		go func() { controlError <- controlServer.Start() }()
-		readyContext, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
-		err = controlServer.WaitReady(readyContext)
-		cancelReady()
-		if err != nil {
-			shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-			_ = controlServer.Stop(shutdownContext)
-			cancelShutdown()
-			return fmt.Errorf("failed to start control server: %w", err)
-		}
-	}
-
-	if err := manager.Start(context.Background()); err != nil {
-		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = controlServer.Stop(shutdownContext)
-		cancelShutdown()
+	if _, err := app.Start(context.Background()); err != nil {
 		return err
 	}
 	defer func() {
 		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = manager.Stop(shutdownContext)
-		_ = controlServer.Stop(shutdownContext)
+		_ = app.Stop(shutdownContext)
 		cancelShutdown()
 	}()
-	probe := engineRuntime.NewHTTPReadinessProbe(cfg.Runtime.StatusAddress)
-	startupContext, cancelStartup := context.WithTimeout(context.Background(), cfg.Runtime.StartupTimeout)
-	err = manager.WaitReady(startupContext, probe, cfg.Runtime.ProbeInterval)
-	cancelStartup()
-	if err != nil {
-		return fmt.Errorf("RoadRunner did not become ready: %w", err)
-	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -398,18 +388,22 @@ func runServerWithConfig(cfg *config.Config) error {
 			log.Println("Shutting down gracefully...")
 			log.Println("Server stopped.")
 			return nil
-		case err := <-controlErr:
+		case err := <-app.ControlErrors():
 			if err == nil {
 				return fmt.Errorf("control server stopped unexpectedly")
 			}
 			return fmt.Errorf("control server failed: %w", err)
 		default:
-			if manager.State() == engineRuntime.StateFailed {
+			if app.Snapshot().EngineState == control.EngineFailed {
 				return fmt.Errorf("RoadRunner failed")
 			}
 			time.Sleep(25 * time.Millisecond)
 		}
 	}
+}
+
+func newComponentRegistry() (*components.Registry, error) {
+	return components.NewRegistry(components.DefaultRegistrations()...)
 }
 
 func runScript(script string, extraArgs []string) {

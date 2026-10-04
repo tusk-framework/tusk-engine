@@ -2,6 +2,7 @@ package control
 
 import (
 	"runtime"
+	"sort"
 
 	"github.com/tusk-framework/tusk-engine/internal/components"
 )
@@ -58,6 +59,7 @@ func (m Metadata) safeResponse(remoteAccess bool) metadataResponse {
 		}
 		descriptors = append(descriptors, copyOf)
 	}
+	sort.Slice(descriptors, func(i, j int) bool { return descriptors[i].Name < descriptors[j].Name })
 	goVersion := m.GoVersion
 	if goVersion == "" {
 		goVersion = runtime.Version()
