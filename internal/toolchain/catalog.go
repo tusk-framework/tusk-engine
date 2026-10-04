@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
+	"time"
 )
 
 const currentCatalogSchema = 1
@@ -30,9 +32,12 @@ type Artifact struct {
 
 // CatalogPayload is the signed portion of a toolchain catalog.
 type CatalogPayload struct {
-	SchemaVersion int        `json:"schema_version"`
-	AllowedHosts  []string   `json:"allowed_hosts"`
-	Artifacts     []Artifact `json:"artifacts"`
+	SchemaVersion  int        `json:"schema_version"`
+	CatalogVersion string     `json:"catalog_version,omitempty"`
+	IssuedAt       string     `json:"issued_at,omitempty"`
+	ExpiresAt      string     `json:"expires_at,omitempty"`
+	AllowedHosts   []string   `json:"allowed_hosts"`
+	Artifacts      []Artifact `json:"artifacts"`
 }
 
 // SignedCatalog wraps a catalog payload with the key identifier and signature
@@ -46,7 +51,9 @@ type SignedCatalog struct {
 // CatalogVerifier validates signed catalog documents against trusted public
 // keys supplied by the Engine release.
 type CatalogVerifier struct {
-	PublicKeys map[string]ed25519.PublicKey
+	PublicKeys      map[string]ed25519.PublicKey
+	RequireValidity bool
+	Now             func() time.Time
 }
 
 // Verify decodes and authenticates a signed catalog. The signature covers the
@@ -66,6 +73,9 @@ func (v CatalogVerifier) Verify(data []byte) (CatalogPayload, error) {
 		return CatalogPayload{}, fmt.Errorf("decode signed catalog: %w", err)
 	}
 
+	if strings.TrimSpace(envelope.Signature) == "" {
+		return CatalogPayload{}, errors.New("catalog signature is required")
+	}
 	publicKey, ok := v.PublicKeys[envelope.KeyID]
 	if !ok {
 		return CatalogPayload{}, fmt.Errorf("unknown catalog key %q", envelope.KeyID)
@@ -87,12 +97,97 @@ func (v CatalogVerifier) Verify(data []byte) (CatalogPayload, error) {
 	if err := validateCatalog(envelope.Payload); err != nil {
 		return CatalogPayload{}, err
 	}
+	if v.RequireValidity {
+		if err := validateCatalogValidity(envelope.Payload, v.now()); err != nil {
+			return CatalogPayload{}, err
+		}
+	}
 	for index, artifact := range envelope.Payload.Artifacts {
 		if err := verifyArtifactSignature(publicKey, artifact); err != nil {
 			return CatalogPayload{}, fmt.Errorf("artifact %d: %w", index, err)
 		}
 	}
 	return envelope.Payload, nil
+}
+
+func (v CatalogVerifier) now() time.Time {
+	if v.Now != nil {
+		return v.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// officialCatalogTrustAnchorsB64 is injected by release builds with -ldflags.
+// It intentionally defaults to empty so development builds fail closed.
+var officialCatalogTrustAnchorsB64 string
+
+// OfficialCatalogVerifier constructs the fail-closed verifier used for the
+// released catalog. Public keys are configuration, never private signing
+// material, and can contain multiple IDs during key rotation overlap.
+func OfficialCatalogVerifier() (CatalogVerifier, error) {
+	if strings.TrimSpace(officialCatalogTrustAnchorsB64) == "" {
+		return CatalogVerifier{}, errors.New("official catalog trust anchor is not configured")
+	}
+	data, err := base64.StdEncoding.DecodeString(officialCatalogTrustAnchorsB64)
+	if err != nil {
+		return CatalogVerifier{}, fmt.Errorf("decode official catalog trust anchor: %w", err)
+	}
+	var document struct {
+		Keys map[string]string `json:"keys"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&document); err != nil {
+		return CatalogVerifier{}, fmt.Errorf("decode official catalog trust anchor: %w", err)
+	}
+	if len(document.Keys) == 0 {
+		return CatalogVerifier{}, errors.New("official catalog trust anchor contains no keys")
+	}
+	keys := make(map[string]ed25519.PublicKey, len(document.Keys))
+	for keyID, encoded := range document.Keys {
+		publicKey, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(publicKey) != ed25519.PublicKeySize {
+			return CatalogVerifier{}, fmt.Errorf("official catalog trust anchor key %q is invalid", keyID)
+		}
+		keys[keyID] = ed25519.PublicKey(publicKey)
+	}
+	return CatalogVerifier{PublicKeys: keys, RequireValidity: true}, nil
+}
+
+func LoadOfficialCatalog(path string) (CatalogPayload, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return CatalogPayload{}, fmt.Errorf("read official catalog: %w", err)
+	}
+	verifier, err := OfficialCatalogVerifier()
+	if err != nil {
+		return CatalogPayload{}, err
+	}
+	return verifier.Verify(data)
+}
+
+func validateCatalogValidity(payload CatalogPayload, now time.Time) error {
+	if payload.CatalogVersion == "" {
+		return errors.New("catalog version is required")
+	}
+	issuedAt, err := time.Parse(time.RFC3339, payload.IssuedAt)
+	if err != nil {
+		return fmt.Errorf("catalog issued_at is invalid: %w", err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339, payload.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("catalog expires_at is invalid: %w", err)
+	}
+	if !expiresAt.After(issuedAt) {
+		return errors.New("catalog expiry must be after issued_at")
+	}
+	if now.Before(issuedAt) {
+		return errors.New("catalog is not yet valid")
+	}
+	if !now.Before(expiresAt) {
+		return errors.New("catalog is expired")
+	}
+	return nil
 }
 
 func verifyArtifactSignature(publicKey ed25519.PublicKey, artifact Artifact) error {
