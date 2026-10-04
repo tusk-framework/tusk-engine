@@ -83,9 +83,6 @@ func Project(cfg *config.Config) ([]byte, error) {
 	if err := cfg.Runtime.Validate(); err != nil {
 		return nil, err
 	}
-	if err := cfg.Metrics.Validate(); err != nil {
-		return nil, err
-	}
 
 	command := strings.TrimSpace(cfg.PhpBinary) + " " + strings.TrimSpace(cfg.WorkerCommand)
 	address := strings.TrimSpace(cfg.Address)
@@ -102,6 +99,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 		HTTP: httpConfig{
 			Address:        fmt.Sprintf("%s:%d", address, cfg.Port),
 			MaxRequestSize: (cfg.MaxBodyBytes + 1024*1024 - 1) / (1024 * 1024),
+			Middleware:     []string{"http_metrics"},
 			Pool: poolConfig{
 				NumWorkers:   cfg.WorkerCount,
 				MaxJobs:      1000,
@@ -120,10 +118,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 			Level: "warn",
 		},
 	}
-	if cfg.Metrics.Enabled {
-		projected.HTTP.Middleware = []string{"http_metrics"}
-		projected.Metrics = &metricsConfig{Address: cfg.Metrics.Address}
-	}
+	projected.Metrics = &metricsConfig{Address: cfg.Runtime.MetricsAddress}
 
 	return yaml.Marshal(projected)
 }

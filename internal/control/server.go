@@ -11,22 +11,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/tusk-framework/tusk-engine/internal/config"
+	"github.com/tusk-framework/tusk-engine/internal/metrics"
 )
 
 type Server struct {
 	cfg      config.ControlConfig
 	provider SnapshotProvider
 	metadata Metadata
+	metrics  http.Handler
 	mu       sync.Mutex
 	http     *http.Server
 	ready    chan struct{}
 	startErr chan error
 }
 
-func NewServer(cfg config.ControlConfig, provider SnapshotProvider, metadata Metadata) (*Server, error) {
+func NewServer(cfg config.ControlConfig, provider SnapshotProvider, metadata Metadata, metricsHandlers ...http.Handler) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -37,10 +37,16 @@ func NewServer(cfg config.ControlConfig, provider SnapshotProvider, metadata Met
 		return nil, fmt.Errorf("control snapshot provider is required")
 	}
 
+	metricHandler := metrics.NewHandler("")
+	if len(metricsHandlers) > 0 && metricsHandlers[0] != nil {
+		metricHandler = metricsHandlers[0]
+	}
+
 	return &Server{
 		cfg:      cfg,
 		provider: provider,
 		metadata: metadata,
+		metrics:  metricHandler,
 		ready:    make(chan struct{}),
 		startErr: make(chan error, 1),
 	}, nil
@@ -55,7 +61,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/healthz", s.protected(http.HandlerFunc(s.handleHealth)))
 	mux.Handle("/v1/readyz", s.protected(http.HandlerFunc(s.handleReady)))
 	mux.Handle("/v1/metadata", s.protected(http.HandlerFunc(s.handleMetadata)))
-	mux.Handle("/v1/metrics", s.protected(promhttp.Handler()))
+	metricsPath := s.cfg.MetricsPath
+	if metricsPath == "" {
+		metricsPath = "/v1/metrics"
+	}
+	mux.Handle(metricsPath, s.protected(s.metrics))
 	return mux
 }
 
@@ -113,7 +123,11 @@ func (s *Server) protected(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if !authorized(request, s.cfg) {
 			writer.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(writer, "unauthorized", http.StatusUnauthorized)
+			writeJSON(writer, http.StatusUnauthorized, controlErrorResponse{
+				Version: "v1",
+				Error:   "unauthorized",
+				Message: "authentication required",
+			})
 			return
 		}
 		next.ServeHTTP(writer, request)
@@ -203,6 +217,12 @@ type healthResponse struct {
 	Status    string    `json:"status"`
 	Engine    string    `json:"engine"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+type controlErrorResponse struct {
+	Version string `json:"version"`
+	Error   string `json:"error"`
+	Message string `json:"message"`
 }
 
 type readinessResponse struct {

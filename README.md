@@ -158,11 +158,11 @@ The control API is disabled by default and does not change the public traffic se
     "control": {
         "enabled": true,
         "address": "127.0.0.1",
-        "port": 9091
+        "port": 9091,
+        "metrics_path": "/v1/metrics"
     },
-    "metrics": {
-        "enabled": true,
-        "address": "127.0.0.1:2112"
+    "runtime": {
+        "metrics_address": "127.0.0.1:2112"
     }
 }
 ```
@@ -172,17 +172,18 @@ When enabled, the engine exposes:
 - `GET /v1/healthz` — process health; returns `200` during startup and graceful shutdown.
 - `GET /v1/readyz` — RoadRunner readiness; returns `200` only after its status plugin reports an HTTP worker ready.
 - `GET /v1/metadata` — safe engine and runtime metadata.
-- `GET /v1/metrics` — Engine and native-runtime Prometheus metrics.
+- `GET /v1/metrics` — authenticated composition of Engine and RoadRunner Prometheus metrics.
 
 The default loopback binding does not require a token. If `address` is non-loopback, configure a non-empty `token`; every control endpoint then requires `Authorization: Bearer <token>`. Do not expose the control API publicly without a network policy and secret management appropriate for your deployment.
 
-RoadRunner request and worker metrics are opt-in because its Prometheus listener is a
-separate endpoint. Set `metrics.enabled` to `true` to enable the loopback-only
-`http://127.0.0.1:2112/metrics` scrape endpoint. Tusk then renders RoadRunner's
+RoadRunner's Prometheus listener is internal and loopback-only at
+`http://127.0.0.1:2112/metrics` by default. Tusk renders RoadRunner's
 `http_metrics` middleware, which supplies bounded method/status/duration request
-metrics plus worker state and queue-depth metrics. The metrics listener rejects
-non-loopback addresses; use an authenticated monitoring gateway or local scrape
-agent when metrics must be collected remotely. The endpoint is disabled by default.
+metrics plus worker state and queue-depth metrics, then composes that scrape
+behind the authenticated Control API. The runtime metrics listener rejects
+non-loopback addresses; use the Control API or an authenticated monitoring
+gateway/local scrape agent when metrics must be collected remotely. The
+Control API and its metrics route are disabled by default.
 
 The legacy native runtime also publishes bounded `tusk_worker_starts_total`,
 `tusk_worker_stops_total`, `tusk_worker_crashes_total`,

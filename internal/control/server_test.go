@@ -164,6 +164,34 @@ func TestRemoteControlProtectsAllEndpoints(t *testing.T) {
 	}
 }
 
+func TestRemoteUnauthorizedResponseUsesVersionedJSON(t *testing.T) {
+	server, err := NewServer(
+		config.ControlConfig{Enabled: true, Address: "0.0.0.0", Port: 9091, Token: "secret"},
+		fakeProvider{snapshot: readySnapshot()},
+		Metadata{EngineName: "tusk-engine", Version: "0.1.0"},
+	)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/v1/healthz", nil))
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v", err)
+	}
+	if body["version"] != "v1" || body["error"] != "unauthorized" || body["message"] != "authentication required" {
+		t.Fatalf("response = %v, want versioned unauthorized contract", body)
+	}
+}
+
 func TestDisabledControlDoesNotExposeRoutes(t *testing.T) {
 	server, err := NewServer(
 		config.ControlConfig{Enabled: false},
@@ -178,6 +206,29 @@ func TestDisabledControlDoesNotExposeRoutes(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/v1/healthz", nil))
 	if recorder.Code != 404 {
 		t.Fatalf("disabled status = %d, want 404", recorder.Code)
+	}
+}
+
+func TestCustomMetricsPathReplacesDefaultRoute(t *testing.T) {
+	server, err := NewServer(
+		config.ControlConfig{Enabled: true, Address: "127.0.0.1", Port: 9091, MetricsPath: "/admin/metrics"},
+		fakeProvider{snapshot: readySnapshot()},
+		Metadata{EngineName: "tusk-engine", Version: "0.1.0"},
+	)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	for _, path := range []string{"/v1/metrics", "/admin/metrics"} {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", path, nil))
+		want := http.StatusNotFound
+		if path == "/admin/metrics" {
+			want = http.StatusOK
+		}
+		if recorder.Code != want {
+			t.Fatalf("GET %s status = %d, want %d", path, recorder.Code, want)
+		}
 	}
 }
 

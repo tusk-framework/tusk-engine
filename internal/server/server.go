@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -64,8 +63,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		if status == 0 {
 			status = http.StatusOK
 		}
-		metrics.RequestDuration.WithLabelValues(r.Method, strconv.Itoa(status)).Observe(time.Since(started).Seconds())
-		metrics.RequestsTotal.WithLabelValues(r.Method, strconv.Itoa(status)).Inc()
+		metrics.ObserveRequest(r.Method, status, time.Since(started))
 	}()
 
 	// 1. Static file check
