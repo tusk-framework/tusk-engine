@@ -31,12 +31,14 @@ func TestExecProcessFactoryPropagatesSpecAndSupportsReload(t *testing.T) {
 	if err := process.Reload(); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- process.Wait() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := process.GracefulStop(ctx); err != nil {
 		t.Fatalf("GracefulStop() error = %v", err)
 	}
-	if err := process.Wait(); err != nil {
+	if err := <-waitErr; err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
 }
