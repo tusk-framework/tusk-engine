@@ -304,12 +304,11 @@ The `tusk dev` command is an alias for `tusk start`.
 
 Tusk provides a unified CLI around the PHP runtime while keeping Composer as the source of truth for dependency resolution:
 
-### 🔄 Automatic Config Detection
-- Reads from `tusk.json` (custom Tusk config)
-- Falls back to `composer.json` (standard PHP)
-- Merges scripts from both if both exist
-- Priority: `tusk.json` > `composer.json`
-- Reads the Composer metadata and scripts needed by the engine without reimplementing Composer's dependency solver
+### Configuration boundaries
+- `tusk.json` contains Engine and platform settings such as ports, runtime limits, and RoadRunner controls.
+- `config/*.php` contains application settings such as database, cache, and application services.
+- `composer.json` provides Composer metadata, dependency declarations, autoloading, and scripts. Composer remains responsible for dependency resolution and the lockfile.
+- Tusk does not treat `composer.json` as the source of application or platform configuration.
 
 ### 📦 Composer-backed Dependency Commands
 These convenience commands delegate dependency work to Composer. Composer
