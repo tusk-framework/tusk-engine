@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -17,9 +19,10 @@ func TestExecProcessFactoryPropagatesSpecAndSupportsReload(t *testing.T) {
 	}
 	factory := ExecProcessFactory{Stdout: io.Discard, Stderr: io.Discard}
 	process, err := factory.Start(ProcessSpec{
-		Binary:     "sh",
-		Args:       []string{"-c", "trap 'exit 0' INT; sleep 10"},
-		ReloadArgs: []string{"-c", "true"},
+		Binary:     os.Args[0],
+		Args:       []string{"-test.run=TestExecProcessHelper"},
+		ReloadArgs: []string{"-test.run=TestExecProcessReloadHelper"},
+		Env:        []string{"TUSK_PROCESS_HELPER=1", "TUSK_RELOAD_HELPER=1"},
 		Dir:        t.TempDir(),
 	})
 	if err != nil {
@@ -64,4 +67,20 @@ func TestExecProcessGracefulStopHonorsDeadline(t *testing.T) {
 	_ = process.Kill()
 	_ = process.Wait()
 	_ = os.ErrProcessDone
+}
+
+func TestExecProcessHelper(t *testing.T) {
+	if os.Getenv("TUSK_PROCESS_HELPER") != "1" {
+		return
+	}
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	<-interrupt
+	os.Exit(0)
+}
+
+func TestExecProcessReloadHelper(t *testing.T) {
+	if os.Getenv("TUSK_RELOAD_HELPER") == "1" {
+		os.Exit(0)
+	}
 }

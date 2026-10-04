@@ -21,6 +21,9 @@ func (f ExecProcessFactory) Start(spec ProcessSpec) (Process, error) {
 	}
 	command := exec.Command(spec.Binary, spec.Args...)
 	command.Dir = spec.Dir
+	if len(spec.Env) > 0 {
+		command.Env = append(os.Environ(), spec.Env...)
+	}
 	if f.Stdout != nil {
 		command.Stdout = f.Stdout
 	}
@@ -83,5 +86,8 @@ func (p *execProcess) Reload() error {
 	}
 	command := exec.Command(p.reload.Binary, p.reload.ReloadArgs...)
 	command.Dir = p.reload.Dir
+	if len(p.reload.Env) > 0 {
+		command.Env = append(os.Environ(), p.reload.Env...)
+	}
 	return command.Run()
 }

@@ -33,6 +33,7 @@ type ProcessSpec struct {
 	Args           []string
 	ReloadArgs     []string
 	Dir            string
+	Env            []string
 	DesiredWorkers int
 }
 
