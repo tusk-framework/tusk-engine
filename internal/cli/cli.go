@@ -373,15 +373,17 @@ func runServerWithConfig(cfg *config.Config) error {
 		cancelShutdown()
 		return err
 	}
+	defer func() {
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = manager.Stop(shutdownContext)
+		_ = controlServer.Stop(shutdownContext)
+		cancelShutdown()
+	}()
 	probe := engineRuntime.NewHTTPReadinessProbe(cfg.Runtime.StatusAddress)
 	startupContext, cancelStartup := context.WithTimeout(context.Background(), cfg.Runtime.StartupTimeout)
 	err = manager.WaitReady(startupContext, probe, cfg.Runtime.ProbeInterval)
 	cancelStartup()
 	if err != nil {
-		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = manager.Stop(shutdownContext)
-		_ = controlServer.Stop(shutdownContext)
-		cancelShutdown()
 		return fmt.Errorf("RoadRunner did not become ready: %w", err)
 	}
 
@@ -392,16 +394,6 @@ func runServerWithConfig(cfg *config.Config) error {
 		select {
 		case <-stop:
 			log.Println("Shutting down gracefully...")
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			stopErr := manager.Stop(ctx)
-			controlStopErr := controlServer.Stop(ctx)
-			cancel()
-			if stopErr != nil {
-				return fmt.Errorf("stop RoadRunner: %w", stopErr)
-			}
-			if controlStopErr != nil {
-				return fmt.Errorf("stop control server: %w", controlStopErr)
-			}
 			log.Println("Server stopped.")
 			return nil
 		case err := <-controlErr:
@@ -411,9 +403,6 @@ func runServerWithConfig(cfg *config.Config) error {
 			return fmt.Errorf("control server failed: %w", err)
 		default:
 			if manager.State() == engineRuntime.StateFailed {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				_ = controlServer.Stop(ctx)
-				cancel()
 				return fmt.Errorf("RoadRunner failed")
 			}
 			time.Sleep(25 * time.Millisecond)
