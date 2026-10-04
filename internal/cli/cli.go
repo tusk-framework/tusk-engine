@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tusk-framework/tusk-engine/internal/config"
+	"github.com/tusk-framework/tusk-engine/internal/control"
 	"github.com/tusk-framework/tusk-engine/internal/php"
 	"github.com/tusk-framework/tusk-engine/internal/server"
 	"github.com/tusk-framework/tusk-engine/internal/toolchain"
@@ -55,7 +56,9 @@ func Run(args []string) {
 			}
 			cfg.WorkerCommand = workerFile
 		}
-		runServerWithConfig(cfg)
+		if err := runServerWithConfig(cfg); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
 	case "setup":
 		if hasArg(args[2:], "--toolchain") {
 			runToolchainSetup(cfg)
@@ -301,7 +304,11 @@ func runToolchainSetupCode(cfg *config.Config, args []string, output, errorsOutp
 	return 0
 }
 
-func runServerWithConfig(cfg *config.Config) {
+func runServerWithConfig(cfg *config.Config) error {
+	if err := cfg.Control.Validate(); err != nil {
+		return fmt.Errorf("invalid control configuration: %w", err)
+	}
+
 	// Resolve the worker path for logging
 	workerPath := cfg.WorkerCommand
 	if !filepath.IsAbs(workerPath) {
@@ -316,13 +323,47 @@ func runServerWithConfig(cfg *config.Config) {
 	// 2. Initialize Worker Pool
 	pool, err := worker.NewPool(cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize worker pool: %v", err)
+		return fmt.Errorf("failed to initialize worker pool: %w", err)
+	}
+	defer pool.Stop()
+
+	controlServer, err := control.NewServer(cfg.Control, pool, control.Metadata{
+		EngineName:     "tusk-engine",
+		Version:        "0.1.0",
+		GoVersion:      runtime.Version(),
+		OS:             runtime.GOOS,
+		Arch:           runtime.GOARCH,
+		WorkerCount:    cfg.WorkerCount,
+		TimeoutSeconds: cfg.Timeout,
+		Capabilities:   []string{"http", "persistent-workers", "metrics"},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize control server: %w", err)
+	}
+	var controlErr <-chan error
+	if cfg.Control.Enabled {
+		controlError := make(chan error, 1)
+		controlErr = controlError
+		go func() {
+			controlError <- controlServer.Start()
+		}()
+		readyContext, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
+		err := controlServer.WaitReady(readyContext)
+		cancelReady()
+		if err != nil {
+			shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = controlServer.Stop(shutdownContext)
+			cancelShutdown()
+			return fmt.Errorf("failed to start control server: %w", err)
+		}
 	}
 
 	if err := pool.Start(); err != nil {
-		log.Fatalf("Failed to start worker pool: %v", err)
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = controlServer.Stop(shutdownContext)
+		cancelShutdown()
+		return fmt.Errorf("failed to start worker pool: %w", err)
 	}
-	defer pool.Stop()
 
 	// 3. Start HTTP Server
 	srv := server.NewServer(cfg, pool)
@@ -331,13 +372,30 @@ func runServerWithConfig(cfg *config.Config) {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	serverErr := make(chan error, 1)
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			serverErr <- err
 		}
 	}()
 
-	<-stop
+	select {
+	case <-stop:
+	case err := <-serverErr:
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = srv.Stop(shutdownContext)
+		_ = controlServer.Stop(shutdownContext)
+		cancelShutdown()
+		return fmt.Errorf("traffic server failed: %w", err)
+	case err := <-controlErr:
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = srv.Stop(shutdownContext)
+		cancelShutdown()
+		if err == nil {
+			return fmt.Errorf("control server stopped unexpectedly")
+		}
+		return fmt.Errorf("control server failed: %w", err)
+	}
 	log.Println("Shutting down gracefully...")
 
 	// Create a context with timeout for shutdown
@@ -347,8 +405,12 @@ func runServerWithConfig(cfg *config.Config) {
 	if err := srv.Stop(ctx); err != nil {
 		log.Printf("Server forced to shutdown: %v", err)
 	}
+	if err := controlServer.Stop(ctx); err != nil {
+		log.Printf("Control server forced to shutdown: %v", err)
+	}
 
 	log.Println("Server stopped.")
+	return nil
 }
 
 func runScript(script string, extraArgs []string) {

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -17,6 +18,85 @@ func TestDefaultConfigHasSafeRequestLimits(t *testing.T) {
 	}
 	if cfg.MaxUploadFiles != 20 {
 		t.Fatalf("MaxUploadFiles = %d, want 20", cfg.MaxUploadFiles)
+	}
+}
+
+func TestDefaultConfigUsesDisabledLoopbackControl(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Control.Enabled {
+		t.Fatal("control API must be disabled by default")
+	}
+	if cfg.Control.Address != "127.0.0.1" {
+		t.Fatalf("expected loopback address, got %q", cfg.Control.Address)
+	}
+	if cfg.Control.Port != 9091 {
+		t.Fatalf("expected control port 9091, got %d", cfg.Control.Port)
+	}
+}
+
+func TestControlConfigValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  ControlConfig
+		wantErr string
+	}{
+		{
+			name: "loopback does not require token",
+			config: ControlConfig{
+				Enabled: true,
+				Address: "127.0.0.1",
+				Port:    9091,
+			},
+		},
+		{
+			name: "remote requires token",
+			config: ControlConfig{
+				Enabled: true,
+				Address: "0.0.0.0",
+				Port:    9091,
+			},
+			wantErr: "token",
+		},
+		{
+			name: "remote token is accepted",
+			config: ControlConfig{
+				Enabled: true,
+				Address: "0.0.0.0",
+				Port:    9091,
+				Token:   "secret",
+			},
+		},
+		{
+			name: "port must be positive",
+			config: ControlConfig{
+				Enabled: true,
+				Address: "127.0.0.1",
+				Port:    0,
+			},
+			wantErr: "port",
+		},
+		{
+			name: "port must fit TCP",
+			config: ControlConfig{
+				Enabled: true,
+				Address: "127.0.0.1",
+				Port:    65536,
+			},
+			wantErr: "port",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

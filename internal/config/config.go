@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +12,9 @@ import (
 // Config holds the Tusk Engine configuration
 type Config struct {
 	// Server configuration
-	Port    int    `json:"port"`
-	Address string `json:"address"`
+	Port    int           `json:"port"`
+	Address string        `json:"address"`
+	Control ControlConfig `json:"control"`
 
 	// Worker configuration
 	WorkerCount    int               `json:"worker_count"`
@@ -50,6 +52,46 @@ type Config struct {
 	Extra            map[string]interface{}       `json:"extra,omitempty"`
 	Config           map[string]interface{}       `json:"config,omitempty"`
 	Repositories     []interface{}                `json:"repositories,omitempty"`
+}
+
+// ControlConfig configures the local control-plane HTTP server.
+type ControlConfig struct {
+	Enabled bool   `json:"enabled"`
+	Address string `json:"address"`
+	Port    int    `json:"port"`
+	Token   string `json:"token"`
+}
+
+// Validate checks whether the control server can be safely exposed.
+func (c ControlConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+
+	if c.Port < 1 || c.Port > 65535 {
+		return fmt.Errorf("control port must be between 1 and 65535")
+	}
+
+	address := strings.TrimSpace(c.Address)
+	if address == "" {
+		address = "127.0.0.1"
+	}
+
+	if !isLocalControlAddress(address) && strings.TrimSpace(c.Token) == "" {
+		return fmt.Errorf("control token is required for non-loopback address %q", address)
+	}
+
+	return nil
+}
+
+func isLocalControlAddress(address string) bool {
+	if strings.EqualFold(address, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(address)
+
+	return ip != nil && ip.IsLoopback()
 }
 
 // Author represents a package author
@@ -92,8 +134,12 @@ const defaultRequestLimit int64 = 10 * 1024 * 1024
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Port:           8080,
-		Address:        "0.0.0.0",
+		Port:    8080,
+		Address: "0.0.0.0",
+		Control: ControlConfig{
+			Address: "127.0.0.1",
+			Port:    9091,
+		},
 		WorkerCount:    4, // Default to a reasonable number
 		WorkerCommand:  "worker.php",
 		PhpBinary:      "php",

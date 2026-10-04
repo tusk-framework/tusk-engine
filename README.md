@@ -14,6 +14,7 @@ The embedded native HTTP/NDJSON server is a frozen migration-era implementation 
 - **Project CLI**: The `tusk` binary handles project management, dependency commands, diagnostics, and framework commands.
 - **Dynamic Config**: Automatically loads settings from `tusk.json` or `composer.json`.
 - **Process Management**: Supervises the RoadRunner process and reports runtime failures.
+- **Control API**: Optional, versioned health, readiness, metadata, and Prometheus endpoints for local operations.
 
 ## Architecture
 
@@ -21,6 +22,7 @@ The embedded native HTTP/NDJSON server is a frozen migration-era implementation 
 graph TD
     subgraph Engine ["Tusk Engine (Go control plane)"]
         Config["Config + lifecycle"] --> RR["RoadRunner child"]
+        Control["Control API"] -.-> Config
     end
 
     RR --> Worker["PHP Workers (Tusk Framework)"]
@@ -90,6 +92,11 @@ Create or edit `tusk.json` in your project root:
     "max_body_bytes": 10485760,
     "max_upload_bytes": 10485760,
     "max_upload_files": 20,
+    "control": {
+        "enabled": false,
+        "address": "127.0.0.1",
+        "port": 9091
+    },
     "scripts": {
         "dev": "tusk start",
         "test": "phpunit"
@@ -135,6 +142,29 @@ silently replaced.
 
 > [!NOTE]
 > If both `tusk.json` and `composer.json` exist, tusk.json takes priority but scripts from both are merged.
+
+### Control API
+
+The control API is disabled by default and does not change the public traffic server. Enable it explicitly for local health checks and observability:
+
+```json
+{
+    "control": {
+        "enabled": true,
+        "address": "127.0.0.1",
+        "port": 9091
+    }
+}
+```
+
+When enabled, the engine exposes:
+
+- `GET /v1/healthz` — process health; returns `200` during startup and graceful shutdown.
+- `GET /v1/readyz` — worker readiness; returns `200` only when at least one worker is ready.
+- `GET /v1/metadata` — safe engine and runtime metadata.
+- `GET /v1/metrics` — Prometheus metrics.
+
+The default loopback binding does not require a token. If `address` is non-loopback, configure a non-empty `token`; every control endpoint then requires `Authorization: Bearer <token>`. Do not expose the control API publicly without a network policy and secret management appropriate for your deployment.
 
 ### 3. Manage Dependencies with Composer
 ```bash

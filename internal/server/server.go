@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tusk-framework/tusk-engine/internal/config"
 	"github.com/tusk-framework/tusk-engine/internal/metrics"
 )
@@ -34,7 +33,6 @@ func NewServer(cfg *config.Config, pool WorkerHandler) *Server {
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
-	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/", s.handleRequest)
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.Address, s.cfg.Port)
