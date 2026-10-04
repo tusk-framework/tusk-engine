@@ -242,6 +242,11 @@ func safeRelativePath(value string) (string, error) {
 	if value == "" || strings.HasPrefix(value, "/") || hasWindowsVolumePrefix(value) || filepath.VolumeName(value) != "" {
 		return "", errors.New("path must be relative")
 	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." {
+			return "", errors.New("path traversal is not allowed")
+		}
+	}
 	clean := pathpkg.Clean(value)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", errors.New("path traversal is not allowed")

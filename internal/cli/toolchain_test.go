@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -102,6 +103,46 @@ func TestToolchainCommandsRejectUnknownFlags(t *testing.T) {
 	}
 	if _, err := parseToolchainSetupArgs([]string{"--offline"}); err != nil {
 		t.Fatalf("parseToolchainSetupArgs() error = %v", err)
+	}
+}
+
+func TestToolchainSetupRunsVerifiedProvisioningService(t *testing.T) {
+	cfg := &config.Config{ProjectRoot: t.TempDir()}
+	catalogPath := filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain.catalog.json")
+	if err := os.MkdirAll(filepath.Dir(catalogPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, []byte("test catalog"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var gotOptions toolchain.ProvisionOptions
+	original := provisionToolchain
+	t.Cleanup(func() { provisionToolchain = original })
+	provisionToolchain = func(_ context.Context, gotConfig *config.Config, options toolchain.ProvisionOptions) (toolchain.SetupReport, error) {
+		if gotConfig != cfg {
+			t.Fatalf("setup config = %p, want %p", gotConfig, cfg)
+		}
+		gotOptions = options
+		return toolchain.SetupReport{Provision: toolchain.ProvisionReport{
+			Ready: true,
+			Results: []toolchain.ToolProvisionResult{{
+				Name:    toolchain.PHP,
+				Version: "8.3.0",
+				Path:    filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain", "php", "php"),
+				Status:  toolchain.StatusProvisioned,
+			}},
+		}}, nil
+	}
+
+	var output bytes.Buffer
+	if err := runToolchainSetupTo(cfg, []string{"--offline"}, &output); err != nil {
+		t.Fatalf("runToolchainSetupTo() error = %v", err)
+	}
+	if !gotOptions.Offline {
+		t.Fatal("setup did not pass offline option to provisioning service")
+	}
+	if !strings.Contains(output.String(), "Provisioned php@8.3.0") {
+		t.Fatalf("setup output = %q, want provision result", output.String())
 	}
 }
 

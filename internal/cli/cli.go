@@ -170,6 +170,10 @@ func runToolchainCommand(cfg *config.Config, args []string) {
 
 type diagnoseFunc func(*config.Config) (toolchain.Report, error)
 
+type toolchainSetupFunc func(context.Context, *config.Config, toolchain.ProvisionOptions) (toolchain.SetupReport, error)
+
+var provisionToolchain toolchainSetupFunc = defaultProvisionToolchain
+
 func runToolchainCommandTo(cfg *config.Config, args []string, output io.Writer, diagnose diagnoseFunc) error {
 	if len(args) == 0 || args[0] == "list" {
 		return runDoctorToWith(cfg, args[1:], output, diagnose)
@@ -292,7 +296,32 @@ func runToolchainSetupTo(cfg *config.Config, args []string, output io.Writer) er
 	if _, err := os.Stat(catalogPath); err != nil {
 		return fmt.Errorf("trusted catalog is not configured at %s; update the Engine catalog before provisioning", catalogPath)
 	}
-	return fmt.Errorf("trusted catalog loading is not available in this Engine build")
+	report, err := provisionToolchain(context.Background(), cfg, options)
+	if err != nil {
+		return err
+	}
+	for _, result := range report.Provision.Results {
+		if result.Status != toolchain.StatusProvisioned {
+			continue
+		}
+		_, _ = fmt.Fprintf(output, "Provisioned %s@%s -> %s\n", result.Name, result.Version, result.Path)
+	}
+	_, err = fmt.Fprintln(output, "Toolchain setup complete.")
+	return err
+}
+
+func defaultProvisionToolchain(ctx context.Context, cfg *config.Config, options toolchain.ProvisionOptions) (toolchain.SetupReport, error) {
+	verifier, err := toolchain.OfficialCatalogVerifier()
+	if err != nil {
+		return toolchain.SetupReport{}, fmt.Errorf("trusted catalog verification unavailable: %w", err)
+	}
+	service := toolchain.SetupService{
+		Root:        cfg.ProjectRoot,
+		CatalogPath: filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain.catalog.json"),
+		Verifier:    verifier,
+		Downloader:  toolchain.HTTPDownloader{Timeout: 5 * time.Minute},
+	}
+	return service.Run(ctx, options)
 }
 
 func runToolchainSetupCode(cfg *config.Config, args []string, output, errorsOutput io.Writer) int {
