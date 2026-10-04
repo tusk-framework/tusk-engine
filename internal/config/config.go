@@ -239,7 +239,7 @@ func DefaultConfig() *Config {
 			ProbeInterval:  defaultRuntimeProbeInterval,
 		},
 		WorkerCount:    4, // Default to a reasonable number
-		WorkerCommand:  "worker.php",
+		WorkerCommand:  ".tusk/runtime/worker.php",
 		PhpBinary:      "php",
 		PhpIni:         "", // Empty means use system default
 		ProjectRoot:    "./",
