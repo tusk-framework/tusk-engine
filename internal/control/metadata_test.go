@@ -3,8 +3,10 @@ package control
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/tusk-framework/tusk-engine/internal/components"
 	"github.com/tusk-framework/tusk-engine/internal/config"
 )
 
@@ -22,6 +24,15 @@ func TestMetadataResponseContainsOnlySafeFields(t *testing.T) {
 			TimeoutSeconds: 30,
 			Capabilities:   []string{"http", "persistent-workers", "metrics"},
 			RemoteAccess:   false,
+			Components: []components.Descriptor{{
+				Name: "http-invocation", Version: "1.0.0", SchemaVersion: "v1",
+				Capabilities: []components.Capability{components.CapabilityServiceInvocation},
+				Health:       components.HealthOnStartup,
+				Schema: components.Schema{Fields: map[string]components.FieldSchema{
+					"token": {Type: components.FieldString, Secret: true},
+				}},
+				SecretFields: []string{"token"},
+			}},
 		},
 	)
 	if err != nil {
@@ -52,5 +63,12 @@ func TestMetadataResponseContainsOnlySafeFields(t *testing.T) {
 	}
 	if _, ok := body["environment"]; ok {
 		t.Fatal("metadata must not expose environment")
+	}
+	componentsValue, ok := body["components"].([]interface{})
+	if !ok || len(componentsValue) != 1 {
+		t.Fatalf("components = %v, want one safe descriptor", body["components"])
+	}
+	if strings.Contains(recorder.Body.String(), "top-secret") {
+		t.Fatal("metadata must not expose component configuration values")
 	}
 }
