@@ -192,6 +192,14 @@ the control registry. RoadRunner remains the source of truth for the default
 runtime's worker lifecycle and queue metrics, avoiding a second worker-pool
 implementation in the Engine.
 
+### Engine components
+
+The Engine activates its versioned component registry before the control plane
+or RoadRunner starts. Configure validated, transport-free providers under the
+`components` object in `tusk.json`; see [Engine components](docs/components.md)
+for the default service-invocation and resilience providers, bounded retry and
+idempotency rules, provider substitution, and safe metadata behavior.
+
 ### 3. Manage Dependencies with Composer
 ```bash
 # Install dependencies

@@ -72,3 +72,18 @@ func TestMetadataResponseContainsOnlySafeFields(t *testing.T) {
 		t.Fatal("metadata must not expose component configuration values")
 	}
 }
+
+func TestMetadataProjectionSortsAndCopiesComponentDescriptors(t *testing.T) {
+	metadata := Metadata{Components: []components.Descriptor{
+		{Name: "zeta", Version: "1.0.0", SchemaVersion: "v1", Capabilities: []components.Capability{components.CapabilityState}, Health: components.HealthDisabled, Schema: components.Schema{Fields: map[string]components.FieldSchema{"token": {Type: components.FieldString, Secret: true}}}},
+		{Name: "alpha", Version: "1.0.0", SchemaVersion: "v1", Capabilities: []components.Capability{components.CapabilityConfiguration}, Health: components.HealthOnDemand},
+	}}
+	response := metadata.safeResponse(false)
+	if len(response.Components) != 2 || response.Components[0].Name != "alpha" || response.Components[1].Name != "zeta" {
+		t.Fatalf("component order = %#v, want alpha then zeta", response.Components)
+	}
+	metadata.Components[0].Schema.Fields["token"] = components.FieldSchema{Type: components.FieldBoolean}
+	if response.Components[1].Schema.Fields["token"].Type != components.FieldString {
+		t.Fatal("metadata projection shares schema field map with caller")
+	}
+}

@@ -71,7 +71,7 @@ func TestStartDoesNotStartServicesWhenComponentActivationFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &recordingRuntime{events: &events}
-	control := &recordingControl{events: &events}
+	control := newRecordingControl(&events, nil)
 	engine, err := New(Options{
 		Registry:       registry,
 		Runtime:        runtime,
@@ -207,7 +207,7 @@ func TestNewFromConfigActivatesFirstPartyComponentsBeforeControlFactory(t *testi
 	}
 	events := []string{}
 	var descriptors []components.Descriptor
-	control := &recordingControl{events: &events}
+	control := newRecordingControl(&events, nil)
 	engine, err := NewFromConfig(cfg, Options{
 		Runtime:             &recordingRuntime{events: &events},
 		Probe:               recordingProbe{},
@@ -233,6 +233,26 @@ func TestNewFromConfigActivatesFirstPartyComponentsBeforeControlFactory(t *testi
 	}
 	if err := engine.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestStartRejectsNilControlFactoryResult(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Control.Enabled = true
+	engine, err := NewFromConfig(cfg, Options{
+		Runtime: &recordingRuntime{events: &[]string{}},
+		Probe:   recordingProbe{},
+		ProbeInterval: time.Millisecond,
+		StartupTimeout: time.Second,
+		ControlFactory: func([]components.Descriptor) (ControlPlane, error) {
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewFromConfig() error = %v", err)
+	}
+	if _, err := engine.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "control plane") {
+		t.Fatalf("Start() error = %v, want nil control plane error", err)
 	}
 }
 

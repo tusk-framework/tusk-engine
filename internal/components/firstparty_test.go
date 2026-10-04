@@ -15,6 +15,15 @@ func TestNewFuncServiceInvocationProviderRejectsNilHandler(t *testing.T) {
 	}
 }
 
+func TestNewFuncServiceInvocationProviderRequiresInvocationCapability(t *testing.T) {
+	_, err := NewFuncServiceInvocationProvider(resilienceDescriptor(), func(context.Context, InvocationRequest) (InvocationResponse, error) {
+		return InvocationResponse{}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "capability") {
+		t.Fatalf("NewFuncServiceInvocationProvider() error = %v, want capability validation", err)
+	}
+}
+
 func TestServiceInvocationProvidersRejectMissingCapability(t *testing.T) {
 	descriptor := validDescriptor()
 	descriptor.Capabilities = []Capability{CapabilityResilience}

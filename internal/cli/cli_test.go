@@ -1,11 +1,34 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/tusk-framework/tusk-engine/internal/components"
 	"github.com/tusk-framework/tusk-engine/internal/config"
 )
+
+func TestNewComponentRegistryActivatesFirstPartyProviders(t *testing.T) {
+	registry, err := newComponentRegistry()
+	if err != nil {
+		t.Fatalf("newComponentRegistry() error = %v", err)
+	}
+	if err := registry.Activate(context.Background(), nil); err != nil {
+		t.Fatalf("Activate() error = %v", err)
+	}
+	for _, check := range []struct {
+		name       string
+		capability components.Capability
+	}{
+		{name: components.BuiltInInvocationComponentName, capability: components.CapabilityServiceInvocation},
+		{name: components.BuiltInResilienceComponentName, capability: components.CapabilityResilience},
+	} {
+		if _, err := registry.Resolve(check.name, check.capability); err != nil {
+			t.Fatalf("Resolve(%q, %q) error = %v", check.name, check.capability, err)
+		}
+	}
+}
 
 func TestRunServerWithConfigRejectsInvalidRuntimeBeforeResolution(t *testing.T) {
 	cfg := config.DefaultConfig()
