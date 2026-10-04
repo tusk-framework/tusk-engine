@@ -2,8 +2,8 @@
 
 ## Status
 
-Design approved in conversation on 2026-10-04. Implementation planning is
-next.
+Design approved in conversation on 2026-10-04. Implementation is complete on
+the RoadRunner control-plane branch and is ready for review.
 
 ## Context
 
