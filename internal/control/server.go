@@ -153,6 +153,7 @@ func (s *Server) handleReady(writer http.ResponseWriter, _ *http.Request) {
 		Version: "v1",
 		Status:  status,
 		Error:   errorCode,
+		Reason:  string(snapshot.ReadinessReason),
 		Message: message,
 		Engine:  string(snapshot.EngineState),
 		Workers: workerCounts{
@@ -208,6 +209,7 @@ type readinessResponse struct {
 	Version   string       `json:"version"`
 	Status    string       `json:"status"`
 	Error     string       `json:"error,omitempty"`
+	Reason    string       `json:"reason"`
 	Message   string       `json:"message"`
 	Engine    string       `json:"engine"`
 	Workers   workerCounts `json:"workers"`

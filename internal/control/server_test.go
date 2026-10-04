@@ -114,6 +114,9 @@ func TestHealthAndReadinessUseStableStatusCodes(t *testing.T) {
 			if tt.wantReason != "" && body["error"] != tt.wantStatus {
 				t.Fatalf("error = %v, want %s", body["error"], tt.wantStatus)
 			}
+			if tt.wantReason != "" && body["reason"] != tt.wantReason {
+				t.Fatalf("reason = %v, want %s", body["reason"], tt.wantReason)
+			}
 			if tt.path == "/v1/readyz" {
 				workers, ok := body["workers"].(map[string]interface{})
 				if !ok {

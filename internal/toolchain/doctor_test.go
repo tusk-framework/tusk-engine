@@ -36,6 +36,9 @@ func TestDiagnosePrefersProjectToolsAndFallsBackToSystem(t *testing.T) {
 	report, err := Diagnose(DiagnosticOptions{
 		Root: root,
 		Lookup: func(name string) (string, error) {
+			if name == "rr" {
+				name = string(RoadRunner)
+			}
 			path, ok := system[ToolName(name)]
 			if !ok {
 				return "", errors.New("not found")

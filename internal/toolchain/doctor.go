@@ -272,7 +272,7 @@ func resolve(root string, name ToolName, spec ToolSpec, override string, lookup 
 	}
 
 	if tool.Path == "" {
-		lookupName := string(name)
+		lookupName := executableName(name)
 		if override != "" && spec.Path == "" {
 			lookupName = override
 		}
@@ -298,6 +298,13 @@ func resolve(root string, name ToolName, spec ToolSpec, override string, lookup 
 		tool.Error = fmt.Sprintf("requested %q, detected %q", spec.Version, tool.Version)
 	}
 	return tool
+}
+
+func executableName(name ToolName) string {
+	if name == RoadRunner {
+		return "rr"
+	}
+	return string(name)
 }
 
 func versionMatches(requested, detected string) bool {
