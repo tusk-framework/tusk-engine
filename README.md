@@ -139,11 +139,13 @@ tusk setup --toolchain --offline
 ```
 
 When `.tusk/toolchain.json` declares a relative executable path, the project
-binary takes precedence over `PATH`. The current slice records requirements
-and diagnoses the environment. The provisioning core supports verified cache
-and offline installation, while the official signed catalog is released with
-the Engine; no local unsigned catalog is accepted and no executable is
-silently replaced.
+binary takes precedence over `PATH`. `tusk setup --toolchain` is the only
+command that provisions tools: it loads the signed catalog at
+`.tusk/toolchain.catalog.json`, installs only pinned tools without explicit
+paths, and records managed paths only after verified installation. Add
+`--offline` to require a digest-checked cache hit; missing, unsigned, or
+expired catalogs fail before download. No executable is silently replaced and
+the global `PATH` is never changed.
 
 Release operators must follow the [official catalog release
 runbook](release/README.md) for payload review, environment-only signing,
@@ -304,7 +306,9 @@ Tusk provides a unified CLI around the PHP runtime while keeping Composer as the
 - Reads the Composer metadata and scripts needed by the engine without reimplementing Composer's dependency solver
 
 ### 📦 Composer-backed Dependency Commands
-These convenience commands delegate dependency work to Composer; Composer must still be installed:
+These convenience commands delegate dependency work to Composer. Composer
+remains the dependency solver and `composer.lock` authority; setup may provide
+the Composer PHAR and its resolved PHP interpreter:
 
 ```bash
 tusk install              # Install all dependencies

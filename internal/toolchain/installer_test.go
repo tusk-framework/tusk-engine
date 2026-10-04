@@ -111,6 +111,16 @@ func TestInstallerRejectsPathTraversalInArtifactVersion(t *testing.T) {
 	}
 }
 
+func TestInstallerRejectsNormalizedArchivePathTraversal(t *testing.T) {
+	installer := Installer{Root: t.TempDir(), GOOS: "linux", GOARCH: "amd64"}
+	for _, member := range []string{"bin/../escape", "./bin/../../escape"} {
+		_, err := installer.Install(installerArtifact("zip", "escape"), makeZip(t, member, []byte("escape")))
+		if err == nil || !strings.Contains(err.Error(), "path") {
+			t.Fatalf("archive member %q error = %v, want path rejection", member, err)
+		}
+	}
+}
+
 func installerArtifact(format, entrypoint string) Artifact {
 	return Artifact{
 		Tool:       RoadRunner,
