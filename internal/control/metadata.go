@@ -12,7 +12,6 @@ type Metadata struct {
 	TimeoutSeconds int
 	Capabilities   []string
 	RemoteAccess   bool
-	ExecutablePath string
 }
 
 type metadataResponse struct {

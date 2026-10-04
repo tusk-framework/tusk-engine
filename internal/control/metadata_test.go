@@ -22,7 +22,6 @@ func TestMetadataResponseContainsOnlySafeFields(t *testing.T) {
 			TimeoutSeconds: 30,
 			Capabilities:   []string{"http", "persistent-workers", "metrics"},
 			RemoteAccess:   false,
-			ExecutablePath: "C:\\secret\\tusk.exe",
 		},
 	)
 	if err != nil {
