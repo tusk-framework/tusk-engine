@@ -95,12 +95,12 @@ function Get-RoadRunnerProcessIds {
     $candidateIds += @(Get-ChildItem -LiteralPath '/proc' -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^\d+$' } |
         ForEach-Object { [int] $_.Name })
-    foreach ($pid in @($candidateIds | Sort-Object -Unique)) {
+    foreach ($processId in @($candidateIds | Sort-Object -Unique)) {
         try {
-            $binary = (& readlink -f "/proc/$pid/exe" 2>$null).Trim()
+            $binary = (& readlink -f "/proc/$processId/exe" 2>$null).Trim()
             if ([System.IO.Path]::GetFileName($binary) -ne 'rr') { continue }
-            $cwd = (& readlink -f "/proc/$pid/cwd" 2>$null).Trim()
-            if ($cwd -eq $ProjectRoot) { [int] $pid }
+            $cwd = (& readlink -f "/proc/$processId/cwd" 2>$null).Trim()
+            if ($cwd -eq $ProjectRoot) { [int] $processId }
         } catch { }
     }
 }
@@ -125,9 +125,9 @@ function Stop-And-ReapRoadRunner {
         if (-not $processIds.Count) { return }
         $processTreeIds = @($processIds) + @($processIds | ForEach-Object { Get-DescendantIds -ParentId $_ })
         $processTreeIds = @($processTreeIds | Sort-Object -Unique)
-        foreach ($pid in $processIds) { & /bin/kill -TERM $pid 2>$null }
+        foreach ($processId in $processIds) { & /bin/kill -TERM $processId 2>$null }
         if (-not (Wait-ProcessTreeExit -ProcessIds $processTreeIds -Seconds 2)) {
-            foreach ($pid in $processTreeIds) { & /bin/kill -KILL $pid 2>$null }
+            foreach ($processId in $processTreeIds) { & /bin/kill -KILL $processId 2>$null }
             [void] (Wait-ProcessTreeExit -ProcessIds $processTreeIds -Seconds 2)
         }
         if (-not (Wait-ProcessTreeExit -ProcessIds $processTreeIds -Seconds 2)) { $script:cleanupSafe = $false }
