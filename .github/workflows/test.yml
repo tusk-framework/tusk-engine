@@ -12,8 +12,8 @@ jobs:
     timeout-minutes: 15
     env:
       # Publish this Framework branch before publishing the Engine change.
-      FRAMEWORK_REF: codex/tusk-bootstrap
-      FRAMEWORK_SHA: 9d1312a09f2b01de5447a66a710788303dfbbe17
+      FRAMEWORK_REF: main
+      FRAMEWORK_SHA: e6e3134b73a4d84a5d5f7a8726640832da5c1f1d
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
