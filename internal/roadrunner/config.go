@@ -20,9 +20,9 @@ type fileConfig struct {
 }
 
 type serverConfig struct {
-	Command string   `yaml:"command"`
-	Relay   string   `yaml:"relay"`
-	Env     []string `yaml:"env,omitempty"`
+	Command string            `yaml:"command"`
+	Relay   string            `yaml:"relay"`
+	Env     map[string]string `yaml:"env,omitempty"`
 }
 
 type httpConfig struct {
@@ -94,7 +94,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 		Relay:   "pipes",
 	}
 	if debugPath, ok := os.LookupEnv("TUSK_WORKER_DEBUG_PATH"); ok && strings.TrimSpace(debugPath) != "" {
-		server.Env = []string{"TUSK_WORKER_DEBUG_PATH=" + debugPath}
+		server.Env = map[string]string{"TUSK_WORKER_DEBUG_PATH": debugPath}
 	}
 
 	projected := fileConfig{
