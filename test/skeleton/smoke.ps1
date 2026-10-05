@@ -106,12 +106,28 @@ function Get-RoadRunnerProcessIds {
 }
 
 function Wait-RoadRunnerProcess {
-    param([int] $EngineId, [string] $ProjectRoot, [int] $Seconds = 10)
+    param(
+        [int] $EngineId,
+        [string] $ProjectRoot,
+        [int] $Seconds = 10,
+        [System.Diagnostics.Process] $EngineProcess,
+        [string[]] $Diagnostics = @()
+    )
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
     do {
         $matches = @(Get-RoadRunnerProcessIds -EngineId $EngineId -ProjectRoot $ProjectRoot)
         if ($matches.Count -eq 1) { return [int] $matches[0] }
         if ($matches.Count -gt 1) { throw "expected one RoadRunner process in $ProjectRoot, found $($matches.Count)" }
+        if ($EngineProcess -and $EngineProcess.HasExited) {
+            $details = @(
+                foreach ($path in $Diagnostics) {
+                    if (Test-Path -LiteralPath $path) {
+                        "$path`n$(Get-Content -Raw -LiteralPath $path)"
+                    }
+                }
+            ) -join "`n"
+            throw "Tusk Engine exited $($EngineProcess.ExitCode) before RoadRunner was independently identifiable in $ProjectRoot$(if ($details) { ":`n$details" })"
+        }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     throw "RoadRunner process was not independently identifiable in $ProjectRoot after $Seconds seconds"
@@ -279,7 +295,7 @@ try {
         [Environment]::SetEnvironmentVariable('TUSK_WORKER_DEBUG_PATH', $previousWorkerDebug)
         foreach ($name in $previousGo.Keys) { [Environment]::SetEnvironmentVariable($name, $previousGo[$name]) }
     }
-    $rrPid = Wait-RoadRunnerProcess -EngineId $server.Id -ProjectRoot $project
+    $rrPid = Wait-RoadRunnerProcess -EngineId $server.Id -ProjectRoot $project -EngineProcess $server -Diagnostics @($stdout, $stderr, $workerDebug)
     $childBinary = (& readlink -f "/proc/$rrPid/exe").Trim()
     if ([System.IO.Path]::GetFileName($childBinary) -ne 'rr') { throw "independently identified process is not RoadRunner: $childBinary" }
     $client = [System.Net.Http.HttpClient]::new()
