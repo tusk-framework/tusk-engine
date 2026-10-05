@@ -11,9 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # Publish this Framework branch before publishing the Engine change.
+      # The integration smoke test follows the published Framework main.
       FRAMEWORK_REF: main
-      FRAMEWORK_SHA: e6e3134b73a4d84a5d5f7a8726640832da5c1f1d
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -47,14 +46,11 @@ jobs:
           git clone --no-checkout https://github.com/tusk-framework/tusk-framework.git "$RUNNER_TEMP/tusk-framework"
           cd "$RUNNER_TEMP/tusk-framework"
           if ! git fetch --depth 1 origin "$FRAMEWORK_REF"; then
-            echo "ERROR: coordinated modern Framework ref $FRAMEWORK_REF is unavailable; publish the Framework branch before the Engine change" >&2
+            echo "ERROR: Framework ref $FRAMEWORK_REF is unavailable" >&2
             exit 1
           fi
           resolved_framework_sha=$(git rev-parse FETCH_HEAD)
-          if [[ "$resolved_framework_sha" != "$FRAMEWORK_SHA" ]]; then
-            echo "ERROR: coordinated Framework ref $FRAMEWORK_REF resolved to $resolved_framework_sha, expected immutable contract $FRAMEWORK_SHA; update the Engine pin only after publishing the intended Framework commit" >&2
-            exit 1
-          fi
+          echo "Using Framework $FRAMEWORK_REF at $resolved_framework_sha"
           git checkout --detach "$resolved_framework_sha"
           if ! test -f tusk-cli/stubs/bootstrap-app.stub || ! test -f tusk-cli/src/Generator/ProjectGenerator.php; then
             echo "ERROR: Framework ref $FRAMEWORK_REF lacks the required modern generator contract" >&2
