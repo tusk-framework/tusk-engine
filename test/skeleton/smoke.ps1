@@ -88,11 +88,12 @@ function Wait-ProcessTreeExit {
 
 function Get-RoadRunnerProcessIds {
     param([int] $EngineId, [string] $ProjectRoot, [int[]] $KnownProcessIds = @())
-    $candidateIds = @($KnownProcessIds)
+    $engineDescendantIds = @()
     if ($EngineId -and (Test-Path -LiteralPath "/proc/$EngineId")) {
-        $candidateIds += @(Get-DescendantIds -ParentId $EngineId)
+        $engineDescendantIds = @(Get-DescendantIds -ParentId $EngineId)
     }
-    $candidateIds += @(Get-ChildItem -LiteralPath '/proc' -Directory -ErrorAction SilentlyContinue |
+    $scopedIds = @($KnownProcessIds) + @($engineDescendantIds)
+    $candidateIds = @($scopedIds) + @(Get-ChildItem -LiteralPath '/proc' -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^\d+$' } |
         ForEach-Object { [int] $_.Name })
     foreach ($processId in @($candidateIds | Sort-Object -Unique)) {
@@ -100,7 +101,7 @@ function Get-RoadRunnerProcessIds {
             $binary = (& readlink -f "/proc/$processId/exe" 2>$null).Trim()
             if ([System.IO.Path]::GetFileName($binary) -ne 'rr') { continue }
             $cwd = (& readlink -f "/proc/$processId/cwd" 2>$null).Trim()
-            if ($cwd -eq $ProjectRoot) { [int] $processId }
+            if ($scopedIds -contains $processId -or $cwd -eq $ProjectRoot) { [int] $processId }
         } catch { }
     }
 }
