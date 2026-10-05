@@ -326,7 +326,7 @@ try {
     & /bin/kill -0 $rrPid 2>$null
     if ($LASTEXITCODE -eq 0) { throw "RoadRunner child $rrPid remained after Engine shutdown" }
     if (Test-Path -LiteralPath (Join-Path $project '.tusk/runtime/worker.php')) { throw 'generated worker remained active after shutdown' }
-    $quarantine = @(Get-ChildItem -LiteralPath (Join-Path $project '.tusk/runtime') -Filter '.worker-quarantine-*' -File)
+    $quarantine = @(Get-ChildItem -LiteralPath (Join-Path $project '.tusk/runtime') -Filter '.worker-quarantine-*' -File -Force)
     if ($server.ExitCode -eq 0) {
         if ($quarantine.Count) { throw 'Engine exited successfully but left an unreported worker quarantine artifact' }
         Write-Output 'PASS skeleton smoke: generated PHP response through RoadRunner; Engine, child, and worker shut down cleanly'
