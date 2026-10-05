@@ -70,7 +70,9 @@ jobs:
           curl --fail --location --silent --show-error \
             https://github.com/roadrunner-server/roadrunner/releases/download/v2025.1.15/roadrunner-2025.1.15-linux-amd64.tar.gz \
             --output "$RUNNER_TEMP/tusk-tools/roadrunner.tar.gz"
-          tar -xzf "$RUNNER_TEMP/tusk-tools/roadrunner.tar.gz" -C "$RUNNER_TEMP/tusk-tools" rr
+          tar -xzf "$RUNNER_TEMP/tusk-tools/roadrunner.tar.gz" -C "$RUNNER_TEMP/tusk-tools"
+          mv "$RUNNER_TEMP/tusk-tools/roadrunner-2025.1.15-linux-amd64/rr" "$RUNNER_TEMP/tusk-tools/rr"
+          rm -rf "$RUNNER_TEMP/tusk-tools/roadrunner-2025.1.15-linux-amd64"
           chmod +x "$RUNNER_TEMP/tusk-tools/rr"
           echo "$RUNNER_TEMP/tusk-tools" >> "$GITHUB_PATH"
 
