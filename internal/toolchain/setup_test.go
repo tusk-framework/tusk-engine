@@ -104,6 +104,33 @@ func TestSetupServiceOfflineUsesVerifiedCacheWithoutDownloading(t *testing.T) {
 	}
 }
 
+func TestSetupServicePropagatesPlatformVariantToProvisioning(t *testing.T) {
+	root := t.TempDir()
+	platform := Platform{OS: "linux", Arch: "amd64", Distribution: "ubuntu-24.04", Libc: "glibc"}
+	writeSetupManifest(t, root, Manifest{Profile: ProfileProjectLocal, Platform: platform, PHP: ToolSpec{Version: "8.3.0"}})
+
+	publicKey, privateKey := setupKeyPair(t)
+	artifacts, dataByURL := setupArtifacts("linux", "amd64")
+	artifacts = artifacts[:1]
+	artifacts[0].GOOS = ""
+	artifacts[0].GOARCH = ""
+	artifacts[0].Target = platform
+	catalogPath := writeSignedSetupCatalog(t, root, artifacts, privateKey)
+
+	service := SetupService{
+		Root: root, CatalogPath: catalogPath,
+		Verifier:   CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
+		Downloader: &fixtureDownloader{dataByURL: dataByURL}, GOOS: "linux", GOARCH: "amd64",
+	}
+	report, err := service.Run(context.Background(), ProvisionOptions{MaxArtifactBytes: 1024})
+	if err != nil {
+		t.Fatalf("SetupService.Run() error = %v", err)
+	}
+	if !strings.Contains(report.Manifest.PHP.Path, filepath.ToSlash(filepath.Join("linux-amd64-ubuntu-24.04-glibc", "php"))) {
+		t.Fatalf("managed PHP path = %q, want platform variant path", report.Manifest.PHP.Path)
+	}
+}
+
 func TestSetupServiceRejectsUntrustedCatalogBeforeProvisioning(t *testing.T) {
 	root := t.TempDir()
 	manifest := Manifest{Profile: ProfileProjectLocal, PHP: ToolSpec{Version: "8.3.0"}}

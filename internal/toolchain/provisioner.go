@@ -43,12 +43,14 @@ type ProvisionReport struct {
 // Provisioner coordinates catalog selection, cache access, downloads, and
 // installation. It has no global PATH side effects.
 type Provisioner struct {
-	Catalog    CatalogPayload
-	Downloader Downloader
-	Cache      ArtifactCache
-	Installer  Installer
-	GOOS       string
-	GOARCH     string
+	Catalog      CatalogPayload
+	Downloader   Downloader
+	Cache        ArtifactCache
+	Installer    Installer
+	GOOS         string
+	GOARCH       string
+	Distribution string
+	Libc         string
 }
 
 // Provision resolves and installs each request independently. A failure for
@@ -88,9 +90,9 @@ func (p Provisioner) provisionOne(ctx context.Context, request ToolRequest, offl
 		result.Error = "tool version is required"
 		return result
 	}
-	artifact, ok := p.findArtifact(request, goos, goarch)
+	artifact, ok := p.findArtifact(request, Platform{OS: goos, Arch: goarch, Distribution: p.Distribution, Libc: p.Libc})
 	if !ok {
-		result.Error = fmt.Sprintf("catalog has no artifact for %s@%s on %s/%s", request.Name, request.Version, goos, goarch)
+		result.Error = fmt.Sprintf("catalog has no artifact for %s@%s on %s", request.Name, request.Version, platformLabel(Platform{OS: goos, Arch: goarch, Distribution: p.Distribution, Libc: p.Libc}))
 		return result
 	}
 	if err := validateArtifact(artifact); err != nil {
@@ -129,11 +131,26 @@ func (p Provisioner) provisionOne(ctx context.Context, request ToolRequest, offl
 	return result
 }
 
-func (p Provisioner) findArtifact(request ToolRequest, goos, goarch string) (Artifact, bool) {
+func (p Provisioner) findArtifact(request ToolRequest, target Platform) (Artifact, bool) {
 	for _, artifact := range p.Catalog.Artifacts {
-		if artifact.Tool == request.Name && artifact.Version == request.Version && artifact.GOOS == goos && artifact.GOARCH == goarch {
+		artifactTarget, err := artifactPlatform(artifact)
+		if err != nil {
+			continue
+		}
+		if artifact.Tool == request.Name && artifact.Version == request.Version && artifactTarget == target {
 			return artifact, true
 		}
 	}
 	return Artifact{}, false
+}
+
+func platformLabel(target Platform) string {
+	label := target.OS + "/" + target.Arch
+	if target.Distribution != "" {
+		label += "/" + target.Distribution
+	}
+	if target.Libc != "" {
+		label += "/" + target.Libc
+	}
+	return label
 }

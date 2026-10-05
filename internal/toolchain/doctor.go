@@ -43,8 +43,10 @@ const (
 
 // Platform identifies the target for a toolchain manifest and diagnostic.
 type Platform struct {
-	OS   string `json:"os,omitempty"`
-	Arch string `json:"arch,omitempty"`
+	OS           string `json:"os,omitempty"`
+	Arch         string `json:"arch,omitempty"`
+	Distribution string `json:"distribution,omitempty"`
+	Libc         string `json:"libc,omitempty"`
 }
 
 // ProfilePolicy describes source and pin requirements for a profile.
@@ -122,8 +124,10 @@ func (m Manifest) Validate() error {
 		return fmt.Errorf("toolchain profile %q is unsupported; use system, project-local, docker, or ci", profile)
 	}
 	for label, value := range map[string]string{
-		"platform OS":   m.Platform.OS,
-		"platform arch": m.Platform.Arch,
+		"platform OS":           m.Platform.OS,
+		"platform arch":         m.Platform.Arch,
+		"platform distribution": m.Platform.Distribution,
+		"platform libc":         m.Platform.Libc,
 	} {
 		if value != "" && (strings.ContainsAny(value, `/\\:`) || strings.ContainsAny(value, "\x00\r\n")) {
 			return fmt.Errorf("toolchain %s must be a safe path segment", label)

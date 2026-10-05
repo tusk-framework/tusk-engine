@@ -21,6 +21,8 @@ type Installer struct {
 	Root              string
 	GOOS              string
 	GOARCH            string
+	Distribution      string
+	Libc              string
 	MaxExtractedBytes int64
 }
 
@@ -36,28 +38,56 @@ func (i Installer) Install(artifact Artifact, data []byte) (string, error) {
 	if strings.TrimSpace(artifact.Version) == "" {
 		return "", errors.New("artifact version is required")
 	}
-	goos := i.GOOS
-	if goos == "" {
-		goos = artifact.GOOS
+	target, err := artifactPlatform(artifact)
+	if err != nil {
+		return "", err
 	}
-	goarch := i.GOARCH
-	if goarch == "" {
-		goarch = artifact.GOARCH
+	installerTarget := Platform{OS: i.GOOS, Arch: i.GOARCH, Distribution: i.Distribution, Libc: i.Libc}
+	if installerTarget.OS == "" {
+		installerTarget.OS = target.OS
 	}
-	if artifact.GOOS != "" && goos != artifact.GOOS {
-		return "", fmt.Errorf("artifact platform %s does not match installer %s", artifact.GOOS, goos)
+	if installerTarget.Arch == "" {
+		installerTarget.Arch = target.Arch
 	}
-	if artifact.GOARCH != "" && goarch != artifact.GOARCH {
-		return "", fmt.Errorf("artifact architecture %s does not match installer %s", artifact.GOARCH, goarch)
+	if installerTarget.Distribution == "" {
+		installerTarget.Distribution = target.Distribution
+	}
+	if installerTarget.Libc == "" {
+		installerTarget.Libc = target.Libc
+	}
+	if target.OS == "" {
+		target.OS = installerTarget.OS
+	}
+	if target.Arch == "" {
+		target.Arch = installerTarget.Arch
+	}
+	if target.Distribution == "" {
+		target.Distribution = installerTarget.Distribution
+	}
+	if target.Libc == "" {
+		target.Libc = installerTarget.Libc
+	}
+	if target != installerTarget {
+		return "", fmt.Errorf("artifact platform %s does not match installer %s", platformLabel(target), platformLabel(installerTarget))
 	}
 	if err := safePathSegment("version", artifact.Version); err != nil {
 		return "", err
 	}
-	if err := safePathSegment("operating system", goos); err != nil {
+	if err := safePathSegment("operating system", target.OS); err != nil {
 		return "", err
 	}
-	if err := safePathSegment("architecture", goarch); err != nil {
+	if err := safePathSegment("architecture", target.Arch); err != nil {
 		return "", err
+	}
+	if target.Distribution != "" {
+		if err := safePathSegment("distribution", target.Distribution); err != nil {
+			return "", err
+		}
+	}
+	if target.Libc != "" {
+		if err := safePathSegment("libc", target.Libc); err != nil {
+			return "", err
+		}
 	}
 	entrypoint, err := safeRelativePath(artifact.EntryPoint)
 	if err != nil {
@@ -67,7 +97,7 @@ func (i Installer) Install(artifact Artifact, data []byte) (string, error) {
 		return "", fmt.Errorf("unsupported artifact format %q", artifact.Format)
 	}
 
-	platform := goos + "-" + goarch
+	platform := platformDirectory(target)
 	finalRoot := filepath.Join(i.Root, "toolchain", string(artifact.Tool), artifact.Version, platform)
 	if _, err := os.Stat(finalRoot); err == nil {
 		return "", fmt.Errorf("installation target already exists: %s", finalRoot)
@@ -103,6 +133,17 @@ func (i Installer) Install(artifact Artifact, data []byte) (string, error) {
 		return "", fmt.Errorf("publish installation: %w", err)
 	}
 	return filepath.Join(finalRoot, entrypoint), nil
+}
+
+func platformDirectory(target Platform) string {
+	parts := []string{target.OS, target.Arch}
+	if target.Distribution != "" {
+		parts = append(parts, target.Distribution)
+	}
+	if target.Libc != "" {
+		parts = append(parts, target.Libc)
+	}
+	return strings.Join(parts, "-")
 }
 
 func (i Installer) extract(stage string, artifact Artifact, entrypoint string, data []byte, maxBytes int64) error {

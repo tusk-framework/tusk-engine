@@ -191,7 +191,10 @@ func validateCatalogForSigning(payload CatalogPayload) error {
 		if _, ok := allowedHosts[strings.ToLower(parsedURL.Hostname())]; !ok {
 			return fmt.Errorf("artifact %d host %q is outside the catalog allowlist", index, parsedURL.Hostname())
 		}
-		key := strings.Join([]string{string(artifact.Tool), artifact.Version, artifact.GOOS, artifact.GOARCH}, "/")
+		key, err := artifactKey(artifact)
+		if err != nil {
+			return fmt.Errorf("artifact %d: %w", index, err)
+		}
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("duplicate artifact %s", key)
 		}

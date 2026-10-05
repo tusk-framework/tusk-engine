@@ -56,6 +56,18 @@ func TestInstallerPublishesZipAndTarGzExecutables(t *testing.T) {
 	assertFileContent(t, tarPath, "tar-binary")
 }
 
+func TestInstallerSeparatesPlatformVariants(t *testing.T) {
+	installer := Installer{Root: t.TempDir(), GOOS: "linux", GOARCH: "amd64", Distribution: "ubuntu-24.04", Libc: "glibc"}
+	artifact := Artifact{Tool: PHP, Version: "8.3.0", Target: Platform{OS: "linux", Arch: "amd64", Distribution: "ubuntu-24.04", Libc: "glibc"}, Format: "raw", EntryPoint: "bin/php"}
+	path, err := installer.Install(artifact, []byte("php"))
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if !strings.Contains(path, filepath.Join("php", "8.3.0", "linux-amd64-ubuntu-24.04-glibc", "bin", "php")) {
+		t.Fatalf("Install() path = %q, want platform variant directory", path)
+	}
+}
+
 func TestInstallerRejectsUnsafeEntrypointsAndMembers(t *testing.T) {
 	installer := Installer{Root: t.TempDir(), GOOS: "windows", GOARCH: "amd64"}
 	for _, entrypoint := range []string{"../rr.exe", `C:\rr.exe`, "/rr.exe"} {

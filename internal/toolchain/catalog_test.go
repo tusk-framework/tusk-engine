@@ -139,6 +139,50 @@ func TestCatalogVerifierRejectsArtifactHostOutsideAllowlist(t *testing.T) {
 	}
 }
 
+func TestCatalogVerifierAcceptsPlatformVariantAndRejectsDuplicateVariant(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := validCatalogPayload()
+	payload.Artifacts[0].GOOS = ""
+	payload.Artifacts[0].GOARCH = ""
+	payload.Artifacts[0].Target = Platform{OS: "linux", Arch: "amd64", Distribution: "ubuntu-24.04", Libc: "glibc"}
+	if _, err := (CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}}).Verify(marshalSignedCatalog(t, payload, "test-key", privateKey)); err != nil {
+		t.Fatalf("platform variant verification error = %v", err)
+	}
+
+	duplicate := payload
+	duplicate.Artifacts = append(append([]Artifact(nil), payload.Artifacts...), payload.Artifacts[0])
+	_, err = (CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}}).Verify(marshalSignedCatalog(t, duplicate, "test-key", privateKey))
+	if err == nil || !strings.Contains(err.Error(), "duplicate artifact") {
+		t.Fatalf("duplicate platform variant error = %v", err)
+	}
+}
+
+func TestCatalogVerifierRejectsConflictingLegacyAndPlatformFields(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := validCatalogPayload()
+	payload.Artifacts[0].Target = Platform{OS: "linux", Arch: "amd64"}
+	_, err = (CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}}).Verify(marshalSignedCatalog(t, payload, "test-key", privateKey))
+	if err == nil || !strings.Contains(err.Error(), "target") {
+		t.Fatalf("conflicting target error = %v, want target validation error", err)
+	}
+}
+
+func TestLegacyArtifactEncodingDoesNotAddEmptyTarget(t *testing.T) {
+	data, err := json.Marshal(Artifact{Tool: RoadRunner, Version: "2025.1.0", GOOS: "windows", GOARCH: "amd64", URL: "https://cdn.example/rr.zip", SHA256: strings.Repeat("a", 64), Signature: "signature", Format: "zip", EntryPoint: "rr.exe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"target"`) {
+		t.Fatalf("legacy artifact JSON unexpectedly contains target: %s", data)
+	}
+}
+
 func validCatalogPayload() CatalogPayload {
 	return CatalogPayload{
 		SchemaVersion: 1,
