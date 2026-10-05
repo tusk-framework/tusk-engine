@@ -86,6 +86,58 @@ function Wait-ProcessTreeExit {
     return $false
 }
 
+function Get-RoadRunnerProcessIds {
+    param([int] $EngineId, [string] $ProjectRoot, [int[]] $KnownProcessIds = @())
+    $candidateIds = @($KnownProcessIds)
+    if ($EngineId -and (Test-Path -LiteralPath "/proc/$EngineId")) {
+        $candidateIds += @(Get-DescendantIds -ParentId $EngineId)
+    }
+    $candidateIds += @(Get-ChildItem -LiteralPath '/proc' -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d+$' } |
+        ForEach-Object { [int] $_.Name })
+    foreach ($pid in @($candidateIds | Sort-Object -Unique)) {
+        try {
+            $binary = (& readlink -f "/proc/$pid/exe" 2>$null).Trim()
+            if ([System.IO.Path]::GetFileName($binary) -ne 'rr') { continue }
+            $cwd = (& readlink -f "/proc/$pid/cwd" 2>$null).Trim()
+            if ($cwd -eq $ProjectRoot) { [int] $pid }
+        } catch { }
+    }
+}
+
+function Wait-RoadRunnerProcess {
+    param([int] $EngineId, [string] $ProjectRoot, [int] $Seconds = 10)
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    do {
+        $matches = @(Get-RoadRunnerProcessIds -EngineId $EngineId -ProjectRoot $ProjectRoot)
+        if ($matches.Count -eq 1) { return [int] $matches[0] }
+        if ($matches.Count -gt 1) { throw "expected one RoadRunner process in $ProjectRoot, found $($matches.Count)" }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "RoadRunner process was not independently identifiable in $ProjectRoot after $Seconds seconds"
+}
+
+function Stop-And-ReapRoadRunner {
+    param([int[]] $KnownProcessIds, [int] $EngineId, [string] $ProjectRoot)
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $processIds = @(Get-RoadRunnerProcessIds -EngineId $EngineId -ProjectRoot $ProjectRoot -KnownProcessIds $KnownProcessIds)
+        if (-not $processIds.Count) { return }
+        $processTreeIds = @($processIds) + @($processIds | ForEach-Object { Get-DescendantIds -ParentId $_ })
+        $processTreeIds = @($processTreeIds | Sort-Object -Unique)
+        foreach ($pid in $processIds) { & /bin/kill -TERM $pid 2>$null }
+        if (-not (Wait-ProcessTreeExit -ProcessIds $processTreeIds -Seconds 2)) {
+            foreach ($pid in $processTreeIds) { & /bin/kill -KILL $pid 2>$null }
+            [void] (Wait-ProcessTreeExit -ProcessIds $processTreeIds -Seconds 2)
+        }
+        if (-not (Wait-ProcessTreeExit -ProcessIds $processTreeIds -Seconds 2)) { $script:cleanupSafe = $false }
+        $remaining = @(Get-RoadRunnerProcessIds -EngineId $EngineId -ProjectRoot $ProjectRoot -KnownProcessIds $KnownProcessIds)
+        if (-not $remaining.Count) { return }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $script:cleanupSafe = $false
+}
+
 function Invoke-Bounded {
     param([string] $File, [string[]] $Arguments, [string] $Directory, [int] $Seconds, [string] $Log, [hashtable] $Environment = @{})
 
@@ -223,6 +275,9 @@ try {
         $env:TMPDIR = $previousTemp
         foreach ($name in $previousGo.Keys) { [Environment]::SetEnvironmentVariable($name, $previousGo[$name]) }
     }
+    $rrPid = Wait-RoadRunnerProcess -EngineId $server.Id -ProjectRoot $project
+    $childBinary = (& readlink -f "/proc/$rrPid/exe").Trim()
+    if ([System.IO.Path]::GetFileName($childBinary) -ne 'rr') { throw "independently identified process is not RoadRunner: $childBinary" }
     $client = [System.Net.Http.HttpClient]::new()
     $client.Timeout = [TimeSpan]::FromSeconds(2)
     try {
@@ -244,11 +299,6 @@ try {
         $response = $client.GetAsync("http://127.0.0.1:$httpPort/").GetAwaiter().GetResult()
         $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if (-not $response.IsSuccessStatusCode -or $body -ne 'Welcome to Tusk!') { throw "unexpected PHP application response: $([int] $response.StatusCode) $body" }
-        $children = @(& pgrep -P $server.Id 2>$null)
-        if ($children.Count -ne 1) { throw "expected one supervised RoadRunner process, found $($children.Count)" }
-        $rrPid = [int] $children[0]
-        $childBinary = (& readlink -f "/proc/$rrPid/exe").Trim()
-        if ([System.IO.Path]::GetFileName($childBinary) -ne 'rr') { throw "supervised child is not RoadRunner: $childBinary" }
     } finally {
         $client.Dispose()
     }
@@ -264,10 +314,24 @@ try {
         Write-Output 'PASS skeleton smoke: generated PHP response through RoadRunner; Engine, child, and worker shut down cleanly'
     } else {
         $shutdownLog = (Get-Content -Raw -LiteralPath $stderr) + (Get-Content -Raw -LiteralPath $stdout)
-        if ($quarantine.Count -ne 1 -or $shutdownLog -notmatch 'clean generated worker:.*worker preserved in quarantine') {
+        $quarantineError = 'clean generated worker: worker preserved in quarantine at "' + $quarantine[0].FullName + '": cannot conditionally unlink'
+        $unexpectedShutdown = @(
+            'RoadRunner did not become ready',
+            'RoadRunner failed',
+            'control server failed',
+            'control server stopped unexpectedly',
+            'stop runtime:',
+            'clean RoadRunner config:'
+        )
+        $runtimeFailureLines = @($shutdownLog -split "`r?`n" | Where-Object { $_ -match 'Runtime failed:' })
+        $expectedRuntimeFailure = 'Runtime failed: ' + $quarantineError
+        if ($quarantine.Count -ne 1 -or $runtimeFailureLines.Count -ne 1 -or
+            $runtimeFailureLines[0] -notmatch [regex]::Escape($expectedRuntimeFailure) -or
+            $shutdownLog -notmatch [regex]::Escape($quarantineError) -or
+            $shutdownLog -notmatch 'Shutting down gracefully\.\.\.' -or $shutdownLog -notmatch 'Server stopped\.' -or
+            @($unexpectedShutdown | Where-Object { $shutdownLog -match [regex]::Escape($_) }).Count) {
             throw "Engine exited $($server.ExitCode) after SIGTERM without the documented quarantine outcome: $shutdownLog"
         }
-        if (-not $shutdownLog.Contains($quarantine[0].Name)) { throw 'Engine quarantine error did not identify the preserved artifact' }
         Write-Output "PASS skeleton smoke: generated PHP response through RoadRunner; Engine and child exited; preserved quarantine $($quarantine[0].Name) reported"
     }
 } catch {
@@ -277,6 +341,7 @@ try {
     }
     throw
 } finally {
+    $knownRoadRunnerPids = @($rrPid) + @(Get-RoadRunnerProcessIds -EngineId $(if ($server) { $server.Id } else { 0 }) -ProjectRoot $project)
     if ($server -and -not $server.HasExited) {
         & /bin/kill -TERM $server.Id 2>$null
         if (-not $server.WaitForExit(10000)) {
@@ -284,16 +349,7 @@ try {
             if (-not $server.WaitForExit(10000) -or ($rrPid -and -not (Wait-ProcessTreeExit -ProcessIds @($rrPid)))) { $cleanupSafe = $false }
         }
     }
-    if ($rrPid) {
-        & /bin/kill -0 $rrPid 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            & /bin/kill -TERM $rrPid 2>$null
-            Start-Sleep -Seconds 1
-            & /bin/kill -0 $rrPid 2>$null
-            if ($LASTEXITCODE -eq 0) { & /bin/kill -KILL $rrPid 2>$null }
-            if (-not (Wait-ProcessTreeExit -ProcessIds @($rrPid))) { $cleanupSafe = $false }
-        }
-    }
+    Stop-And-ReapRoadRunner -KnownProcessIds $knownRoadRunnerPids -EngineId $(if ($server) { $server.Id } else { 0 }) -ProjectRoot $project
     if ($server -and $cleanupSafe) { $server.Dispose() }
     if ($cleanupSafe -and (Test-Path -LiteralPath $scratch)) { Remove-Item -LiteralPath $scratch -Recurse -Force }
     if (-not $cleanupSafe) { Write-Warning "Preserved fixture at $scratch because a process did not exit after Kill" }
