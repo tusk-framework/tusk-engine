@@ -253,8 +253,10 @@ try {
 
     $stdout = Join-Path $scratch 'server.stdout.log'
     $stderr = Join-Path $scratch 'server.stderr.log'
+    $workerDebug = Join-Path $scratch 'worker-debug.log'
     $previousPath = $env:PATH
     $previousTemp = $env:TMPDIR
+    $previousWorkerDebug = $env:TUSK_WORKER_DEBUG_PATH
     $previousGo = @{}
     foreach ($name in @('GOTMPDIR', 'GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOTOOLCHAIN', 'GOTELEMETRY', 'GOENV')) {
         $previousGo[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -268,11 +270,13 @@ try {
     $env:GOTOOLCHAIN = 'local'
     $env:GOTELEMETRY = 'off'
     $env:GOENV = 'off'
+    $env:TUSK_WORKER_DEBUG_PATH = $workerDebug
     try {
         $server = Start-Process -FilePath $engine -ArgumentList 'start' -WorkingDirectory $project -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     } finally {
         $env:PATH = $previousPath
         $env:TMPDIR = $previousTemp
+        [Environment]::SetEnvironmentVariable('TUSK_WORKER_DEBUG_PATH', $previousWorkerDebug)
         foreach ($name in $previousGo.Keys) { [Environment]::SetEnvironmentVariable($name, $previousGo[$name]) }
     }
     $rrPid = Wait-RoadRunnerProcess -EngineId $server.Id -ProjectRoot $project
@@ -336,7 +340,7 @@ try {
         Write-Output "PASS skeleton smoke: generated PHP response through RoadRunner; Engine and child exited; preserved quarantine $($quarantine[0].Name) reported"
     }
 } catch {
-    foreach ($log in @('build.log', 'generate.log', 'composer.log', 'init.log', 'framework-build.log', 'server.stdout.log', 'server.stderr.log')) {
+    foreach ($log in @('build.log', 'generate.log', 'composer.log', 'init.log', 'framework-build.log', 'server.stdout.log', 'server.stderr.log', 'worker-debug.log')) {
         $path = Join-Path $scratch $log
         if (Test-Path -LiteralPath $path) { Write-Error "$log`n$(Get-Content -Raw -LiteralPath $path)" -ErrorAction Continue }
     }
