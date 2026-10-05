@@ -104,6 +104,9 @@ func TestToolchainCommandsRejectUnknownFlags(t *testing.T) {
 	if _, err := parseToolchainSetupArgs([]string{"--offline"}); err != nil {
 		t.Fatalf("parseToolchainSetupArgs() error = %v", err)
 	}
+	if _, err := parseToolchainSetupArgs([]string{"--toolchain", "--offline"}); err != nil {
+		t.Fatalf("parseToolchainSetupArgs() rejected the documented setup command: %v", err)
+	}
 }
 
 func TestToolchainSetupRunsVerifiedProvisioningService(t *testing.T) {

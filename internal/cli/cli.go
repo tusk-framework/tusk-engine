@@ -314,6 +314,10 @@ func parseToolchainSetupArgs(args []string) (toolchain.ProvisionOptions, error) 
 	options := toolchain.ProvisionOptions{}
 	for _, arg := range args {
 		switch arg {
+		case "--toolchain":
+			// setup dispatches through this parser after selecting the
+			// toolchain mode. Accept the mode selector here so the documented
+			// command `tusk setup --toolchain` reaches provisioning.
 		case "--offline":
 			options.Offline = true
 		default:
