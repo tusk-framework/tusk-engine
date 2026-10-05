@@ -10,6 +10,9 @@ jobs:
   skeleton:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Task 3 modern generator contract; publish this Framework commit before enabling CI.
+      FRAMEWORK_REF: e2a27c432f98978a3d5ca1a2f2fb9153c8275eff
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -21,14 +24,40 @@ jobs:
           extensions: curl, zip, sockets
           tools: composer:v2
 
-      - name: Check out Framework and install its dependencies
+      - name: Check smoke prerequisites
+        id: prerequisites
         shell: bash
         run: |
-          git clone --depth 1 https://github.com/tusk-framework/tusk-framework.git "$RUNNER_TEMP/tusk-framework"
+          missing=()
+          for tool in php composer go; do
+            command -v "$tool" >/dev/null || missing+=("$tool")
+          done
+          if (( ${#missing[@]} )); then
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo "SKIP skeleton smoke: missing prerequisites: ${missing[*]}"
+          else
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out coordinated modern Framework and install dependencies
+        if: steps.prerequisites.outputs.available == 'true'
+        shell: bash
+        run: |
+          git clone --no-checkout https://github.com/tusk-framework/tusk-framework.git "$RUNNER_TEMP/tusk-framework"
           cd "$RUNNER_TEMP/tusk-framework"
+          if ! git fetch --depth 1 origin "$FRAMEWORK_REF"; then
+            echo "ERROR: coordinated modern Framework ref $FRAMEWORK_REF is unavailable; publish the Task 3 Framework commit or update FRAMEWORK_REF" >&2
+            exit 1
+          fi
+          git checkout --detach FETCH_HEAD
+          if ! test -f tusk-cli/stubs/bootstrap-app.stub || ! test -f tusk-cli/src/Generator/ProjectGenerator.php; then
+            echo "ERROR: Framework ref $FRAMEWORK_REF lacks the required modern generator contract" >&2
+            exit 1
+          fi
           composer install --no-interaction --no-progress --prefer-dist
 
       - name: Provide RoadRunner
+        if: steps.prerequisites.outputs.available == 'true'
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/tusk-tools"
@@ -38,19 +67,6 @@ jobs:
           tar -xzf "$RUNNER_TEMP/tusk-tools/roadrunner.tar.gz" -C "$RUNNER_TEMP/tusk-tools" rr
           chmod +x "$RUNNER_TEMP/tusk-tools/rr"
           echo "$RUNNER_TEMP/tusk-tools" >> "$GITHUB_PATH"
-
-      - name: Check smoke prerequisites
-        id: prerequisites
-        shell: bash
-        run: |
-          if command -v php && command -v composer && command -v rr && \
-             test -f "$RUNNER_TEMP/tusk-framework/vendor/autoload.php" && \
-             test -f "$RUNNER_TEMP/tusk-framework/tusk-cli/stubs/bootstrap-app.stub"; then
-            echo 'available=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'available=false' >> "$GITHUB_OUTPUT"
-            echo 'SKIP skeleton smoke: PHP, Composer, RoadRunner, Framework dependencies, or modern Framework generator unavailable'
-          fi
 
       - name: Run generated skeleton through RoadRunner
         if: steps.prerequisites.outputs.available == 'true'

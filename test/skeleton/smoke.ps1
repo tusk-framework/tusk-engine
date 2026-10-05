@@ -39,7 +39,7 @@ if ($RoadRunnerPath) {
 if (-not $FrameworkPath -or -not (Test-Path -LiteralPath (Join-Path $FrameworkPath 'tusk-cli/src/Generator/ProjectGenerator.php') -PathType Leaf)) {
     $missing += 'checked-out Framework path (-FrameworkPath)'
 } elseif (-not (Test-Path -LiteralPath (Join-Path $FrameworkPath 'tusk-cli/stubs/bootstrap-app.stub') -PathType Leaf)) {
-    $missing += 'modern Framework generator (bootstrap-app.stub)'
+    throw "Framework checkout at '$FrameworkPath' lacks the required modern generator (tusk-cli/stubs/bootstrap-app.stub); use the coordinated modern Framework ref"
 } elseif (-not (Test-Path -LiteralPath (Join-Path $FrameworkPath 'vendor/autoload.php') -PathType Leaf)) {
     $missing += 'Framework Composer dependencies (vendor/autoload.php)'
 }
@@ -58,6 +58,34 @@ if ($IsWindows) {
     exit 0
 }
 
+function Get-DescendantIds {
+    param([int] $ParentId)
+    foreach ($child in @(& pgrep -P $ParentId 2>$null)) {
+        if ($child -match '^\d+$') {
+            [int] $child
+            Get-DescendantIds -ParentId ([int] $child)
+        }
+    }
+}
+
+function Wait-ProcessTreeExit {
+    param([int[]] $ProcessIds, [int] $Seconds = 10)
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    do {
+        $active = @($ProcessIds | Where-Object {
+            $stat = "/proc/$_/stat"
+            if (-not (Test-Path -LiteralPath $stat)) { return $false }
+            try {
+                $state = Get-Content -LiteralPath $stat -Raw -ErrorAction Stop
+                return $state -match '^\d+ \(.+\) ([^Z ]) '
+            } catch { return $false }
+        })
+        if (-not $active.Count) { return $true }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $false
+}
+
 function Invoke-Bounded {
     param([string] $File, [string[]] $Arguments, [string] $Directory, [int] $Seconds, [string] $Log, [hashtable] $Environment = @{})
 
@@ -68,7 +96,13 @@ function Invoke-Bounded {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.Environment['TMPDIR'] = $scratch
+    $start.Environment['GOTMPDIR'] = $scratch
     $start.Environment['GOCACHE'] = Join-Path $scratch 'gocache'
+    $start.Environment['GOMODCACHE'] = Join-Path $scratch 'gomodcache'
+    $start.Environment['GOPATH'] = Join-Path $scratch 'gopath'
+    $start.Environment['GOTOOLCHAIN'] = 'local'
+    $start.Environment['GOTELEMETRY'] = 'off'
+    $start.Environment['GOENV'] = 'off'
     $start.Environment['COMPOSER_HOME'] = Join-Path $scratch 'composer-home'
     $start.Environment['COMPOSER_CACHE_DIR'] = Join-Path $scratch 'composer-cache'
     foreach ($argument in $Arguments) { [void] $start.ArgumentList.Add($argument) }
@@ -78,15 +112,31 @@ function Invoke-Bounded {
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($Seconds * 1000)) {
-            $process.Kill($true)
+            $descendants = @(Get-DescendantIds -ParentId $process.Id)
+            try { $process.Kill($true) } catch {
+                $script:cleanupSafe = $false
+                throw
+            }
+            if (-not $process.WaitForExit(10000) -or -not (Wait-ProcessTreeExit -ProcessIds $descendants)) {
+                $script:cleanupSafe = $false
+                throw "$File timed out and its process tree did not exit after Kill"
+            }
+            if (-not [System.Threading.Tasks.Task]::WaitAll(@($stdout, $stderr), 10000)) {
+                $script:cleanupSafe = $false
+                throw "$File timed out and its process-tree output did not close after Kill"
+            }
             throw "$File timed out after $Seconds seconds"
+        }
+        if (-not [System.Threading.Tasks.Task]::WaitAll(@($stdout, $stderr), 10000)) {
+            $script:cleanupSafe = $false
+            throw "$File exited but its process-tree output did not close"
         }
         $output = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
         [System.IO.File]::WriteAllText($Log, $output)
         if ($process.ExitCode -ne 0) { throw "$File exited $($process.ExitCode): $output" }
         return $output
     } finally {
-        $process.Dispose()
+        if ($script:cleanupSafe) { $process.Dispose() }
     }
 }
 
@@ -105,6 +155,7 @@ $project = Join-Path $scratch 'smoke-app'
 $engine = Join-Path $scratch 'tusk'
 $server = $null
 $rrPid = $null
+$cleanupSafe = $true
 New-Item -ItemType Directory -Path $scratch | Out-Null
 
 try {
@@ -152,13 +203,25 @@ try {
     $stderr = Join-Path $scratch 'server.stderr.log'
     $previousPath = $env:PATH
     $previousTemp = $env:TMPDIR
+    $previousGo = @{}
+    foreach ($name in @('GOTMPDIR', 'GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOTOOLCHAIN', 'GOTELEMETRY', 'GOENV')) {
+        $previousGo[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
     $env:PATH = (Split-Path -Parent $rr) + [System.IO.Path]::PathSeparator + $previousPath
     $env:TMPDIR = $scratch
+    $env:GOTMPDIR = $scratch
+    $env:GOCACHE = Join-Path $scratch 'gocache'
+    $env:GOMODCACHE = Join-Path $scratch 'gomodcache'
+    $env:GOPATH = Join-Path $scratch 'gopath'
+    $env:GOTOOLCHAIN = 'local'
+    $env:GOTELEMETRY = 'off'
+    $env:GOENV = 'off'
     try {
         $server = Start-Process -FilePath $engine -ArgumentList 'start' -WorkingDirectory $project -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     } finally {
         $env:PATH = $previousPath
         $env:TMPDIR = $previousTemp
+        foreach ($name in $previousGo.Keys) { [Environment]::SetEnvironmentVariable($name, $previousGo[$name]) }
     }
     $client = [System.Net.Http.HttpClient]::new()
     $client.Timeout = [TimeSpan]::FromSeconds(2)
@@ -192,11 +255,21 @@ try {
 
     & /bin/kill -TERM $server.Id
     if ($LASTEXITCODE -ne 0 -or -not $server.WaitForExit(15000)) { throw 'Engine did not exit within 15 seconds of SIGTERM' }
-    if ($server.ExitCode -ne 0) { throw "Engine exited $($server.ExitCode) after SIGTERM" }
     & /bin/kill -0 $rrPid 2>$null
     if ($LASTEXITCODE -eq 0) { throw "RoadRunner child $rrPid remained after Engine shutdown" }
     if (Test-Path -LiteralPath (Join-Path $project '.tusk/runtime/worker.php')) { throw 'generated worker remained active after shutdown' }
-    Write-Output 'PASS skeleton smoke: generated PHP response through RoadRunner; Engine, child, and worker shut down cleanly'
+    $quarantine = @(Get-ChildItem -LiteralPath (Join-Path $project '.tusk/runtime') -Filter '.worker-quarantine-*' -File)
+    if ($server.ExitCode -eq 0) {
+        if ($quarantine.Count) { throw 'Engine exited successfully but left an unreported worker quarantine artifact' }
+        Write-Output 'PASS skeleton smoke: generated PHP response through RoadRunner; Engine, child, and worker shut down cleanly'
+    } else {
+        $shutdownLog = (Get-Content -Raw -LiteralPath $stderr) + (Get-Content -Raw -LiteralPath $stdout)
+        if ($quarantine.Count -ne 1 -or $shutdownLog -notmatch 'clean generated worker:.*worker preserved in quarantine') {
+            throw "Engine exited $($server.ExitCode) after SIGTERM without the documented quarantine outcome: $shutdownLog"
+        }
+        if (-not $shutdownLog.Contains($quarantine[0].Name)) { throw 'Engine quarantine error did not identify the preserved artifact' }
+        Write-Output "PASS skeleton smoke: generated PHP response through RoadRunner; Engine and child exited; preserved quarantine $($quarantine[0].Name) reported"
+    }
 } catch {
     foreach ($log in @('build.log', 'generate.log', 'composer.log', 'init.log', 'framework-build.log', 'server.stdout.log', 'server.stderr.log')) {
         $path = Join-Path $scratch $log
@@ -206,7 +279,10 @@ try {
 } finally {
     if ($server -and -not $server.HasExited) {
         & /bin/kill -TERM $server.Id 2>$null
-        if (-not $server.WaitForExit(10000)) { $server.Kill($true); [void] $server.WaitForExit(5000) }
+        if (-not $server.WaitForExit(10000)) {
+            try { $server.Kill($true) } catch { $cleanupSafe = $false }
+            if (-not $server.WaitForExit(10000) -or ($rrPid -and -not (Wait-ProcessTreeExit -ProcessIds @($rrPid)))) { $cleanupSafe = $false }
+        }
     }
     if ($rrPid) {
         & /bin/kill -0 $rrPid 2>$null
@@ -215,8 +291,10 @@ try {
             Start-Sleep -Seconds 1
             & /bin/kill -0 $rrPid 2>$null
             if ($LASTEXITCODE -eq 0) { & /bin/kill -KILL $rrPid 2>$null }
+            if (-not (Wait-ProcessTreeExit -ProcessIds @($rrPid))) { $cleanupSafe = $false }
         }
     }
-    if ($server) { $server.Dispose() }
-    if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Recurse -Force }
+    if ($server -and $cleanupSafe) { $server.Dispose() }
+    if ($cleanupSafe -and (Test-Path -LiteralPath $scratch)) { Remove-Item -LiteralPath $scratch -Recurse -Force }
+    if (-not $cleanupSafe) { Write-Warning "Preserved fixture at $scratch because a process did not exit after Kill" }
 }
