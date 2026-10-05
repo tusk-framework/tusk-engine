@@ -2,6 +2,7 @@ package roadrunner
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/tusk-framework/tusk-engine/internal/config"
@@ -19,8 +20,9 @@ type fileConfig struct {
 }
 
 type serverConfig struct {
-	Command string `yaml:"command"`
-	Relay   string `yaml:"relay"`
+	Command string   `yaml:"command"`
+	Relay   string   `yaml:"relay"`
+	Env     []string `yaml:"env,omitempty"`
 }
 
 type httpConfig struct {
@@ -87,12 +89,17 @@ func Project(cfg *config.Config) ([]byte, error) {
 		address = "127.0.0.1"
 	}
 
+	server := serverConfig{
+		Command: command,
+		Relay:   "pipes",
+	}
+	if debugPath, ok := os.LookupEnv("TUSK_WORKER_DEBUG_PATH"); ok && strings.TrimSpace(debugPath) != "" {
+		server.Env = []string{"TUSK_WORKER_DEBUG_PATH=" + debugPath}
+	}
+
 	projected := fileConfig{
 		Version: "3",
-		Server: serverConfig{
-			Command: command,
-			Relay:   "pipes",
-		},
+		Server:  server,
 		HTTP: httpConfig{
 			Address:        fmt.Sprintf("%s:%d", address, cfg.Port),
 			MaxRequestSize: (cfg.MaxBodyBytes + 1024*1024 - 1) / (1024 * 1024),
