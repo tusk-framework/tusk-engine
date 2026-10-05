@@ -588,7 +588,7 @@ func runServerWithConfigUsing(cfg *config.Config, factory engineRuntime.ProcessF
 		return err
 	}
 	if _, err := app.Start(context.Background()); err != nil {
-		return err
+		return fmt.Errorf("RoadRunner startup failed: %w", err)
 	}
 	defer func() {
 		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)

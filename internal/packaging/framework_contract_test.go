@@ -17,7 +17,7 @@ func TestFrameworkSmokeContractUsesPublishedImmutableBranchTip(t *testing.T) {
 	if !strings.Contains(contents, "FRAMEWORK_REF: codex/tusk-bootstrap") {
 		t.Fatalf("workflow must use the coordinated publishable Framework branch")
 	}
-	if !regexp.MustCompile(`(?m)^\s+FRAMEWORK_SHA: [0-9a-f]{40}$`).MatchString(contents) {
+	if !regexp.MustCompile(`(?m)^\s+FRAMEWORK_SHA: [0-9a-f]{40}\r?$`).MatchString(contents) {
 		t.Fatalf("workflow must pin the Framework branch to a full commit SHA")
 	}
 	if !strings.Contains(contents, `git fetch --depth 1 origin "$FRAMEWORK_REF"`) {
