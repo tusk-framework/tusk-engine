@@ -101,7 +101,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 				NumWorkers:   cfg.WorkerCount,
 				MaxJobs:      1000,
 				MaxQueueSize: 1000,
-				Debug:        true,
+				Debug:        false,
 				Supervisor: supervisorConfig{
 					MaxWorkerMemory: 256,
 					ExecTTL:         "30s",

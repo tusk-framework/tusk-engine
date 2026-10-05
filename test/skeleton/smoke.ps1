@@ -352,6 +352,9 @@ try {
     }
     Stop-And-ReapRoadRunner -KnownProcessIds $knownRoadRunnerPids -EngineId $(if ($server) { $server.Id } else { 0 }) -ProjectRoot $project
     if ($server -and $cleanupSafe) { $server.Dispose() }
-    if ($cleanupSafe -and (Test-Path -LiteralPath $scratch)) { Remove-Item -LiteralPath $scratch -Recurse -Force }
+    if ($cleanupSafe -and (Test-Path -LiteralPath $scratch)) {
+        if (-not $IsWindows) { & /bin/chmod -R u+w -- $scratch 2>$null }
+        Remove-Item -LiteralPath $scratch -Recurse -Force
+    }
     if (-not $cleanupSafe) { Write-Warning "Preserved fixture at $scratch because a process did not exit after Kill" }
 }
