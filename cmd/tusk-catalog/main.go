@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
@@ -26,10 +27,12 @@ func main() {
 
 func run(args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: tusk-catalog <sign|verify> [flags]")
+		fmt.Fprintln(stderr, "usage: tusk-catalog <validate|sign|verify> [flags]")
 		return 2
 	}
 	switch args[0] {
+	case "validate":
+		return runValidate(args[1:], lookup, stdout, stderr)
 	case "sign":
 		return runSign(args[1:], lookup, stdout, stderr)
 	case "verify":
@@ -38,6 +41,39 @@ func run(args []string, lookup func(string) (string, bool), stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		return 2
 	}
+}
+
+func runValidate(args []string, _ func(string) (string, bool), stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	payloadPath := flags.String("payload", "", "path to the unsigned catalog payload")
+	download := flags.Bool("download", false, "download and verify every catalog artifact")
+	maxBytes := flags.Int64("max-bytes", 512*1024*1024, "maximum bytes allowed per artifact download")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *payloadPath == "" {
+		fmt.Fprintln(stderr, "validate requires --payload")
+		return 2
+	}
+	payloadBytes, err := os.ReadFile(*payloadPath)
+	if err != nil {
+		return reportError(stderr, "read catalog payload", err)
+	}
+	payload, err := toolchain.DecodeCatalogPayload(payloadBytes)
+	if err != nil {
+		return reportError(stderr, "decode catalog payload", err)
+	}
+	if err := toolchain.ValidateCatalogPayload(payload); err != nil {
+		return reportError(stderr, "validate catalog payload", err)
+	}
+	if *download {
+		if err := toolchain.VerifyCatalogArtifacts(context.Background(), payload, nil, *maxBytes); err != nil {
+			return reportError(stderr, "verify catalog artifacts", err)
+		}
+	}
+	fmt.Fprintf(stdout, "validated catalog payload %s\n", *payloadPath)
+	return 0
 }
 
 func runSign(args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {

@@ -2,6 +2,7 @@ package toolchain
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -43,6 +44,46 @@ func DecodeCatalogPayload(data []byte) (CatalogPayload, error) {
 		return CatalogPayload{}, fmt.Errorf("decode catalog payload: %w", err)
 	}
 	return payload, nil
+}
+
+// ValidateCatalogPayload validates reviewed release input before any signing
+// configuration is loaded. It deliberately does not verify artifact bytes;
+// the catalog digest and detached signatures are produced by SignCatalog.
+func ValidateCatalogPayload(payload CatalogPayload) error {
+	return validateCatalogForSigning(payload)
+}
+
+// VerifyCatalogArtifacts downloads each unique URL/digest pair and confirms
+// the bytes match the reviewed payload before signing. It does not require
+// signing credentials and is safe to run as release preflight.
+func VerifyCatalogArtifacts(ctx context.Context, payload CatalogPayload, downloader Downloader, maxBytes int64) error {
+	if err := ValidateCatalogPayload(payload); err != nil {
+		return err
+	}
+	if downloader == nil {
+		downloader = HTTPDownloader{}
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxArtifactBytes
+	}
+	verified := make(map[string]struct{}, len(payload.Artifacts))
+	for index, artifact := range payload.Artifacts {
+		key := artifact.URL + "\x00" + strings.ToLower(artifact.SHA256)
+		if _, ok := verified[key]; ok {
+			continue
+		}
+		data, err := downloader.Download(ctx, artifact.URL, maxBytes)
+		if err != nil {
+			return fmt.Errorf("artifact %d download: %w", index, err)
+		}
+		digest := sha256.Sum256(data)
+		actual := hex.EncodeToString(digest[:])
+		if !strings.EqualFold(actual, artifact.SHA256) {
+			return fmt.Errorf("artifact %d digest mismatch: expected %s, got %s", index, strings.ToLower(artifact.SHA256), actual)
+		}
+		verified[key] = struct{}{}
+	}
+	return nil
 }
 
 // ParseTrustAnchorsB64 decodes the public trust-anchor document used by

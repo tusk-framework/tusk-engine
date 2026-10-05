@@ -19,6 +19,7 @@ func TestReleaseWorkflowRequiresCatalogSigningAndAttestationSteps(t *testing.T) 
 		"TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}",
 		"TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}",
 		"release/toolchain-catalog.payload.json",
+		"go run ./cmd/tusk-catalog validate --download",
 		"go run ./cmd/tusk-catalog sign",
 		"go run ./cmd/tusk-catalog verify",
 		"actions/attest@v4",
@@ -33,6 +34,37 @@ func TestReleaseWorkflowRequiresCatalogSigningAndAttestationSteps(t *testing.T) 
 	}
 	if strings.Index(workflow, "go run ./cmd/tusk-catalog sign") > strings.Index(workflow, "Run GoReleaser") {
 		t.Fatal("catalog signing must happen before GoReleaser")
+	}
+	if strings.Index(workflow, "go run ./cmd/tusk-catalog validate") > strings.Index(workflow, "go run ./cmd/tusk-catalog sign") {
+		t.Fatal("catalog payload validation must happen before signing")
+	}
+}
+
+func TestCommittedCatalogPayloadIsValidAndHasDeclaredReleaseMatrix(t *testing.T) {
+	root := repositoryRoot(t)
+	data := []byte(readRepositoryFile(t, root, "release", "toolchain-catalog.payload.json"))
+	payload, err := DecodeCatalogPayload(data)
+	if err != nil {
+		t.Fatalf("DecodeCatalogPayload() error = %v", err)
+	}
+	if err := validateCatalogForSigning(payload); err != nil {
+		t.Fatalf("validateCatalogForSigning() error = %v", err)
+	}
+	if len(payload.Artifacts) != 11 {
+		t.Fatalf("payload artifact count = %d, want 11", len(payload.Artifacts))
+	}
+	seen := make(map[string]bool)
+	for _, artifact := range payload.Artifacts {
+		target, err := artifactPlatform(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[string(artifact.Tool)+"/"+target.OS+"/"+target.Arch] = true
+	}
+	for _, required := range []string{"php/windows/amd64", "composer/linux/amd64", "composer/darwin/arm64", "roadrunner/windows/amd64", "roadrunner/linux/arm64", "roadrunner/darwin/amd64"} {
+		if !seen[required] {
+			t.Errorf("payload matrix is missing %q", required)
+		}
 	}
 }
 
