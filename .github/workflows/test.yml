@@ -13,7 +13,7 @@ jobs:
     env:
       # Publish this Framework branch before publishing the Engine change.
       FRAMEWORK_REF: codex/tusk-bootstrap
-      FRAMEWORK_SHA: 6debe1902c231fc5db194d009f540993f6df3369
+      FRAMEWORK_SHA: 6a6dcf9efad623fb4e2a30e9241be8deb0477436
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
