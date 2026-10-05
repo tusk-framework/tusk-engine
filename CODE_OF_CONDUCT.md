@@ -1,47 +1,78 @@
-# Contributor Covenant Code of Conduct
+# Tusk Engine Code of Conduct
 
-## Our Pledge
+## Our pledge
 
-We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
+We want the Tusk Engine community to be welcoming, respectful, and safe for
+everyone. We welcome participation regardless of age, body size, visible or
+invisible disability, ethnicity, sex characteristics, gender identity or
+expression, level of experience, education, socioeconomic status, nationality,
+personal appearance, race, religion, or sexual identity and orientation.
 
-We pledge to act and interact in ways that contribute to an open, welcoming, diverse, inclusive, and healthy community.
+We expect everyone who participates in this project to help create a healthy
+community where people can learn, contribute, and disagree constructively.
 
-## Our Standards
+## Expected behavior
 
-Examples of behavior that contributes to a positive environment for our community include:
+Examples of behavior that contribute to a positive environment include:
 
-* Demonstrating empathy and kindness toward other people
-* Being respectful of differing opinions, viewpoints, and experiences
-* Giving and gracefully accepting constructive feedback
-* Accepting responsibility and apologizing to those affected by our mistakes, and learning from the experience
-* Focusing on what is best not just for us as individuals, but for the overall community
+- treating people with empathy, patience, and respect;
+- assuming good intent while asking for clarification when something is unclear;
+- giving and receiving constructive feedback;
+- discussing technical decisions with evidence and focusing on the work;
+- accepting responsibility for mistakes and repairing their impact;
+- respecting different viewpoints, backgrounds, and levels of experience; and
+- protecting private information and project credentials.
 
-Examples of unacceptable behavior include:
+## Unacceptable behavior
 
-* The use of sexualized language or imagery, and sexual attention or advances of any kind
-* Trolling, insulting or derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or email address, without their explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+The following behavior is not tolerated:
 
-## Enforcement Responsibilities
+- harassment, discrimination, intimidation, or personal attacks;
+- sexualized language, imagery, attention, or advances;
+- trolling, insulting, humiliating, or deliberately disruptive behavior;
+- publishing someone else's private information without permission;
+- threats, stalking, or unwanted contact;
+- submitting malicious code, credentials, malware, or deliberately harmful
+  changes; and
+- any other conduct that would reasonably be considered inappropriate in a
+  professional or open-source community.
 
-Community leaders are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
-
-Community leaders have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, and will communicate reasons for moderation decisions when appropriate.
+Technical disagreement is welcome. It must remain focused on ideas, evidence,
+and project outcomes rather than on a person's identity or character.
 
 ## Scope
 
-This Code of Conduct applies within all community spaces, and also applies when an individual is officially representing the community in public spaces. Examples of representing our community include using an official e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event.
+This Code of Conduct applies in the repository, issues, pull requests,
+discussions, chat channels, events, and any other space where someone is
+representing the Tusk project. It also applies when project participation or
+communication has a direct impact on another community member's safety or
+ability to contribute.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement. All complaints will be reviewed and investigated promptly and fairly.
+Project maintainers are responsible for clarifying and enforcing this Code of
+Conduct. They may remove, edit, or reject comments, issues, commits, pull
+requests, or other contributions that violate these standards, and may take
+additional action when appropriate.
 
-All community leaders are obligated to respect the privacy and security of the reporter of any incident.
+Maintainers will aim to investigate reports promptly, fairly, and privately.
+They will avoid conflicts of interest and will keep the reporter's identity
+confidential whenever possible.
+
+## Reporting
+
+Do not open a public issue for a sensitive conduct report. Contact the project
+maintainers privately through the GitHub repository or organization channels.
+For security vulnerabilities or exposed credentials, follow the process in
+[`SECURITY.md`](SECURITY.md) instead.
+
+When reporting an incident, include the relevant repository or channel, what
+happened, when it happened, the people involved, and any supporting evidence
+that can be shared safely. Reports made in good faith will not result in
+retaliation.
 
 ## Attribution
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 2.0, available at https://www.contributor-covenant.org/version/2/0/code_of_conduct.html.
+This Code of Conduct is adapted from the [Contributor Covenant], version 2.1.
 
-[homepage]: https://www.contributor-covenant.org
+[Contributor Covenant]: https://www.contributor-covenant.org/version/2/1/code_of_conduct.html
