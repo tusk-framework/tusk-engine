@@ -3,6 +3,7 @@ package roadrunner
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tusk-framework/tusk-engine/internal/config"
@@ -85,7 +86,8 @@ func Project(cfg *config.Config) ([]byte, error) {
 		return nil, err
 	}
 
-	command := fmt.Sprintf("%s %s", cfg.PhpBinary, generatedWorkerPath)
+	workerPath := filepath.ToSlash(filepath.Join(cfg.ProjectRoot, generatedWorkerPath))
+	command := fmt.Sprintf("%s %s", cfg.PhpBinary, workerPath)
 	address := strings.TrimSpace(cfg.Address)
 	if address == "" {
 		address = "127.0.0.1"

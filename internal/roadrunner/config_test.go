@@ -47,11 +47,12 @@ func TestProjectIgnoresLegacyWorkerCommand(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkerCommand = "worker.php"
 	cfg.PhpBinary = "custom-php"
+	cfg.ProjectRoot = "/srv/tusk-app"
 	projected, err := Project(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(projected), "command: custom-php .tusk/runtime/worker.php") || strings.Contains(string(projected), "command: worker.php") {
+	if !strings.Contains(string(projected), "command: custom-php /srv/tusk-app/.tusk/runtime/worker.php") || strings.Contains(string(projected), "command: worker.php") {
 		t.Fatalf("configured PHP binary or generated worker contract is wrong: %s", projected)
 	}
 }

@@ -198,7 +198,8 @@ func TestStartUsesGeneratedWorkerUntilProcessStops(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(projected), "command: php .tusk/runtime/worker.php") {
+		expectedWorkerCommand := "command: php " + filepath.ToSlash(filepath.Join(root, ".tusk", "runtime", "worker.php"))
+		if !strings.Contains(string(projected), expectedWorkerCommand) {
 			t.Fatalf("RoadRunner config uses wrong worker: %s", projected)
 		}
 		return nil
