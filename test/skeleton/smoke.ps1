@@ -342,7 +342,7 @@ try {
             'clean RoadRunner config:'
         )
         $expectedQuarantinePattern = 'worker preserved in quarantine at\s*"[^"]+"\s*:\s*cannot conditionally unlink\s*"[^"]+"\s*by file identity on Linux'
-        $expectedRuntimeFailurePattern = 'Runtime failed:\s*clean generated worker:\s*' + $expectedQuarantinePattern
+        $expectedRuntimeFailurePattern = 'Runtime failed:\s*clean generated\s*worker:\s*' + $expectedQuarantinePattern
         if ($quarantine.Count -ne 1 -or
             $shutdownLog -notmatch $expectedRuntimeFailurePattern -or
             $shutdownLog -notmatch 'Shutting down gracefully\.\.\.' -or $shutdownLog -notmatch 'Server stopped\.' -or
