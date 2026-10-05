@@ -2,6 +2,7 @@ package toolchain
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,6 +13,27 @@ import (
 	"testing"
 	"time"
 )
+
+func TestVerifyCatalogArtifactsChecksDigestAndDeduplicates(t *testing.T) {
+	data := []byte("verified-artifact")
+	payload := releaseCatalogPayload()
+	payload.Artifacts[0].SHA256 = digestFor(data)
+	duplicateURL := payload.Artifacts[0]
+	duplicateURL.GOOS = "linux"
+	payload.Artifacts = append(payload.Artifacts, duplicateURL)
+	downloader := &fixtureDownloader{data: data}
+	if err := VerifyCatalogArtifacts(context.Background(), payload, downloader, 1024); err != nil {
+		t.Fatalf("VerifyCatalogArtifacts() error = %v", err)
+	}
+	if downloader.calls != 1 {
+		t.Fatalf("downloader calls = %d, want one for duplicate URL/digest", downloader.calls)
+	}
+
+	payload.Artifacts[0].SHA256 = strings.Repeat("f", 64)
+	if err := VerifyCatalogArtifacts(context.Background(), payload, &fixtureDownloader{data: data}, 1024); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("digest mismatch error = %v", err)
+	}
+}
 
 func TestSignCatalogIsDeterministicAndAuthenticatesArtifacts(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)

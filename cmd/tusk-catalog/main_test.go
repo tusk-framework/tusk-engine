@@ -86,3 +86,34 @@ func TestRunSignRejectsPrivateKeyFileOption(t *testing.T) {
 		t.Fatal("run(sign --private-key) = 0, want non-zero")
 	}
 }
+
+func TestRunValidateChecksPayloadWithoutSigningConfiguration(t *testing.T) {
+	payload := toolchain.CatalogPayload{
+		SchemaVersion:  1,
+		CatalogVersion: "2026.10.0",
+		IssuedAt:       time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		AllowedHosts:   []string{"cdn.example"},
+		Artifacts: []toolchain.Artifact{{
+			Tool: toolchain.RoadRunner, Version: "2025.1.0",
+			Target: toolchain.Platform{OS: "linux", Arch: "amd64"},
+			URL:    "https://cdn.example/rr.tar.gz", SHA256: strings.Repeat("a", 64),
+			Format: "tar.gz", EntryPoint: "rr/rr",
+		}},
+	}
+	payloadPath := filepath.Join(t.TempDir(), "payload.json")
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(payloadPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"validate", "--payload", payloadPath}, func(string) (string, bool) { return "", false }, &stdout, &stderr); code != 0 {
+		t.Fatalf("run(validate) = %d, want zero; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "validated catalog payload") {
+		t.Fatalf("validate output = %q, want success message", stdout.String())
+	}
+}

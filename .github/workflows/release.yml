@@ -24,6 +24,9 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Validate official catalog payload
+        run: go run ./cmd/tusk-catalog validate --download --payload release/toolchain-catalog.payload.json
+
       - name: Validate official catalog release inputs
         shell: bash
         env:

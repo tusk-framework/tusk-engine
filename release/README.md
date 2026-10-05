@@ -27,6 +27,21 @@ outside this repository:
 Missing payload, key ID, signing secret, or public trust anchors stops the
 workflow before GoReleaser publishes anything.
 
+The first catalog supports project-local provisioning on Windows x64 for PHP,
+Composer, and RoadRunner. Composer and RoadRunner are also provisioned on
+Linux x64/arm64 and macOS x64/arm64. Linux and macOS PHP intentionally remain
+system/Docker responsibilities until Tusk publishes a relocatable PHP bundle;
+the catalog does not use distribution packages whose `/usr` layout or shared
+libraries would escape the project-local installation root.
+
+The release workflow validates the payload before reading signing credentials:
+
+```bash
+go run ./cmd/tusk-catalog validate \
+  --download \
+  --payload release/toolchain-catalog.payload.json
+```
+
 ## Artifact target metadata
 
 The catalog keeps `goos` and `goarch` for compatibility with schema-1 payloads.
@@ -61,6 +76,9 @@ TUSK_CATALOG_KEY_ID="$..."
 TUSK_CATALOG_TRUST_ANCHORS_B64="$..."
 export TUSK_CATALOG_SIGNING_KEY_B64 TUSK_CATALOG_KEY_ID TUSK_CATALOG_TRUST_ANCHORS_B64
 
+go run ./cmd/tusk-catalog validate \
+  --download \
+  --payload release/toolchain-catalog.payload.json
 go run ./cmd/tusk-catalog sign \
   --payload release/toolchain-catalog.payload.json \
   --catalog release/toolchain-catalog.json \
