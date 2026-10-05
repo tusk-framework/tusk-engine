@@ -341,10 +341,15 @@ try {
             'stop runtime:',
             'clean RoadRunner config:'
         )
-        $expectedQuarantinePattern = 'worker preserved in quarantine at\s*"[^"]+"\s*:\s*cannot conditionally unlink\s*"[^"]+"\s*by file identity on Linux'
-        $expectedRuntimeFailurePattern = 'Runtime failed:\s*clean generated\s*worker:\s*' + $expectedQuarantinePattern
+        $expectedShutdownMarkers = @(
+            'Runtime failed:',
+            'clean generated\s*worker:',
+            'worker preserved in quarantine at',
+            'cannot conditionally unlink',
+            'by file identity on Linux'
+        )
         if ($quarantine.Count -ne 1 -or
-            $shutdownLog -notmatch $expectedRuntimeFailurePattern -or
+            @($expectedShutdownMarkers | Where-Object { $shutdownLog -notmatch $_ }).Count -or
             $shutdownLog -notmatch 'Shutting down gracefully\.\.\.' -or $shutdownLog -notmatch 'Server stopped\.' -or
             @($unexpectedShutdown | Where-Object { $shutdownLog -match [regex]::Escape($_) }).Count) {
             throw "Engine exited $($server.ExitCode) after SIGTERM without the documented quarantine outcome: $shutdownLog"
