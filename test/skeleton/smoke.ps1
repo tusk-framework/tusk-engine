@@ -314,19 +314,20 @@ try {
         Write-Output 'PASS skeleton smoke: generated PHP response through RoadRunner; Engine, child, and worker shut down cleanly'
     } else {
         $shutdownLog = (Get-Content -Raw -LiteralPath $stderr) + (Get-Content -Raw -LiteralPath $stdout)
-        $quarantineError = 'clean generated worker: worker preserved in quarantine at "' + $quarantine[0].FullName + '": cannot conditionally unlink'
+        $quarantineError = 'clean generated worker: worker preserved in quarantine at "' + $quarantine[0].FullName + '": cannot conditionally unlink "' + $quarantine[0].Name + '" by file identity on Linux'
         $unexpectedShutdown = @(
             'RoadRunner did not become ready',
             'RoadRunner failed',
             'control server failed',
             'control server stopped unexpectedly',
+            'stop control server:',
             'stop runtime:',
             'clean RoadRunner config:'
         )
         $runtimeFailureLines = @($shutdownLog -split "`r?`n" | Where-Object { $_ -match 'Runtime failed:' })
         $expectedRuntimeFailure = 'Runtime failed: ' + $quarantineError
         if ($quarantine.Count -ne 1 -or $runtimeFailureLines.Count -ne 1 -or
-            $runtimeFailureLines[0] -notmatch [regex]::Escape($expectedRuntimeFailure) -or
+            $runtimeFailureLines[0] -notmatch ([regex]::Escape($expectedRuntimeFailure) + '\s*$') -or
             $shutdownLog -notmatch [regex]::Escape($quarantineError) -or
             $shutdownLog -notmatch 'Shutting down gracefully\.\.\.' -or $shutdownLog -notmatch 'Server stopped\.' -or
             @($unexpectedShutdown | Where-Object { $shutdownLog -match [regex]::Escape($_) }).Count) {
