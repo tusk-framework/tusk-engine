@@ -19,15 +19,46 @@ const currentCatalogSchema = 1
 
 // Artifact identifies one immutable tool binary for one target platform.
 type Artifact struct {
-	Tool       ToolName `json:"tool"`
-	Version    string   `json:"version"`
-	GOOS       string   `json:"goos"`
-	GOARCH     string   `json:"goarch"`
+	Tool    ToolName `json:"tool"`
+	Version string   `json:"version"`
+	// GOOS and GOARCH are retained for schema-1 compatibility. New catalogs
+	// should use Target so distro and libc variants cannot collide.
+	GOOS       string   `json:"goos,omitempty"`
+	GOARCH     string   `json:"goarch,omitempty"`
+	Target     Platform `json:"target,omitempty"`
 	URL        string   `json:"url"`
 	SHA256     string   `json:"sha256"`
 	Signature  string   `json:"signature"`
 	Format     string   `json:"format"`
 	EntryPoint string   `json:"entrypoint"`
+}
+
+// MarshalJSON keeps schema-1 signatures byte-compatible by omitting the
+// optional target object when it is not configured. encoding/json does not
+// omit zero-valued struct fields with omitempty on its own.
+func (a Artifact) MarshalJSON() ([]byte, error) {
+	type serializedArtifact struct {
+		Tool       ToolName  `json:"tool"`
+		Version    string    `json:"version"`
+		GOOS       string    `json:"goos,omitempty"`
+		GOARCH     string    `json:"goarch,omitempty"`
+		Target     *Platform `json:"target,omitempty"`
+		URL        string    `json:"url"`
+		SHA256     string    `json:"sha256"`
+		Signature  string    `json:"signature"`
+		Format     string    `json:"format"`
+		EntryPoint string    `json:"entrypoint"`
+	}
+	var target *Platform
+	if a.Target != (Platform{}) {
+		copy := a.Target
+		target = &copy
+	}
+	return json.Marshal(serializedArtifact{
+		Tool: a.Tool, Version: a.Version, GOOS: a.GOOS, GOARCH: a.GOARCH,
+		Target: target, URL: a.URL, SHA256: a.SHA256, Signature: a.Signature,
+		Format: a.Format, EntryPoint: a.EntryPoint,
+	})
 }
 
 // CatalogPayload is the signed portion of a toolchain catalog.
@@ -211,7 +242,10 @@ func validateCatalog(payload CatalogPayload) error {
 		if _, ok := allowedHosts[strings.ToLower(parsedURL.Hostname())]; !ok {
 			return fmt.Errorf("artifact %d host %q is outside the catalog allowlist", index, parsedURL.Hostname())
 		}
-		key := strings.Join([]string{string(artifact.Tool), artifact.Version, artifact.GOOS, artifact.GOARCH}, "/")
+		key, err := artifactKey(artifact)
+		if err != nil {
+			return fmt.Errorf("artifact %d: %w", index, err)
+		}
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("duplicate artifact %s", key)
 		}
@@ -227,11 +261,25 @@ func validateArtifact(artifact Artifact) error {
 	if err := safePathSegment("version", artifact.Version); err != nil {
 		return err
 	}
-	if err := safePathSegment("operating system", artifact.GOOS); err != nil {
+	target, err := artifactPlatform(artifact)
+	if err != nil {
 		return err
 	}
-	if err := safePathSegment("architecture", artifact.GOARCH); err != nil {
+	if err := safePathSegment("operating system", target.OS); err != nil {
 		return err
+	}
+	if err := safePathSegment("architecture", target.Arch); err != nil {
+		return err
+	}
+	if target.Distribution != "" {
+		if err := safePathSegment("distribution", target.Distribution); err != nil {
+			return err
+		}
+	}
+	if target.Libc != "" {
+		if err := safePathSegment("libc", target.Libc); err != nil {
+			return err
+		}
 	}
 	parsedURL, err := url.Parse(artifact.URL)
 	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
@@ -253,4 +301,33 @@ func validateArtifact(artifact Artifact) error {
 		return errors.New("artifact entrypoint is required")
 	}
 	return nil
+}
+
+// artifactPlatform resolves the current schema target and the legacy fields.
+// If both are present they must agree, preventing ambiguous signed metadata.
+func artifactPlatform(artifact Artifact) (Platform, error) {
+	target := artifact.Target
+	for label, values := range map[string][2]string{
+		"operating system": {artifact.GOOS, target.OS},
+		"architecture":     {artifact.GOARCH, target.Arch},
+	} {
+		if values[0] != "" && values[1] != "" && values[0] != values[1] {
+			return Platform{}, fmt.Errorf("artifact target %s conflicts with legacy fields", label)
+		}
+	}
+	if target.OS == "" {
+		target.OS = artifact.GOOS
+	}
+	if target.Arch == "" {
+		target.Arch = artifact.GOARCH
+	}
+	return target, nil
+}
+
+func artifactKey(artifact Artifact) (string, error) {
+	target, err := artifactPlatform(artifact)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join([]string{string(artifact.Tool), artifact.Version, target.OS, target.Arch, target.Distribution, target.Libc}, "/"), nil
 }

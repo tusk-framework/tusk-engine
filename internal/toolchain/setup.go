@@ -97,18 +97,26 @@ func (s SetupService) Run(ctx context.Context, options ProvisionOptions) (SetupR
 	if installer.GOARCH == "" {
 		installer.GOARCH = target.Arch
 	}
+	if installer.Distribution == "" {
+		installer.Distribution = target.Distribution
+	}
+	if installer.Libc == "" {
+		installer.Libc = target.Libc
+	}
 	downloader := s.Downloader
 	if downloader == nil && !options.Offline {
 		downloader = HTTPDownloader{}
 	}
 
 	provisioner := Provisioner{
-		Catalog:    catalog,
-		Downloader: downloader,
-		Cache:      cache,
-		Installer:  installer,
-		GOOS:       target.OS,
-		GOARCH:     target.Arch,
+		Catalog:      catalog,
+		Downloader:   downloader,
+		Cache:        cache,
+		Installer:    installer,
+		GOOS:         target.OS,
+		GOARCH:       target.Arch,
+		Distribution: target.Distribution,
+		Libc:         target.Libc,
 	}
 	provision := provisioner.Provision(ctx, requests, options)
 	if !provision.Ready {

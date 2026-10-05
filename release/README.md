@@ -27,6 +27,29 @@ outside this repository:
 Missing payload, key ID, signing secret, or public trust anchors stops the
 workflow before GoReleaser publishes anything.
 
+## Artifact target metadata
+
+The catalog keeps `goos` and `goarch` for compatibility with schema-1 payloads.
+New artifacts should use a `target` object instead:
+
+```json
+{
+  "target": {
+    "os": "linux",
+    "arch": "amd64",
+    "distribution": "ubuntu-24.04",
+    "libc": "glibc"
+  }
+}
+```
+
+`distribution` and `libc` are optional for platform-neutral tools such as a
+Composer PHAR, but are required in practice when a PHP binary depends on a
+specific Linux userspace. The Engine matches the complete target and stores
+variants in separate versioned directories, so an Ubuntu binary cannot be
+silently selected for another distribution. Do not publish a distro-specific
+artifact with only `goos`/`goarch`; that would make the target ambiguous.
+
 ## Reproducible signing
 
 The signing command uses only canonical JSON and standard-library Ed25519 and

@@ -96,6 +96,38 @@ func TestProvisionerRejectsDigestMismatchAndKeepsOtherToolsIndependent(t *testin
 	}
 }
 
+func TestProvisionerSelectsConfiguredPlatformVariant(t *testing.T) {
+	data := []byte("ubuntu-php")
+	artifact := provisioningArtifact(PHP, "8.3.0", data)
+	artifact.GOOS = ""
+	artifact.GOARCH = ""
+	artifact.Target = Platform{OS: "linux", Arch: "amd64", Distribution: "ubuntu-24.04", Libc: "glibc"}
+	p := Provisioner{
+		Catalog:    CatalogPayload{SchemaVersion: 1, Artifacts: []Artifact{artifact}},
+		Downloader: &fixtureDownloader{data: data},
+		Cache:      ArtifactCache{Root: t.TempDir()},
+		Installer:  Installer{Root: t.TempDir(), GOOS: "linux", GOARCH: "amd64", Distribution: "ubuntu-24.04", Libc: "glibc"},
+		GOOS:       "linux", GOARCH: "amd64", Distribution: "ubuntu-24.04", Libc: "glibc",
+	}
+	report := p.Provision(context.Background(), []ToolRequest{{Name: PHP, Version: "8.3.0"}}, ProvisionOptions{MaxArtifactBytes: 1024})
+	if !report.Ready || report.Results[0].Status != StatusProvisioned {
+		t.Fatalf("platform variant report = %#v, want provisioned", report)
+	}
+}
+
+func TestProvisionerDoesNotUseDistroArtifactForUnspecifiedTarget(t *testing.T) {
+	data := []byte("ubuntu-php")
+	artifact := provisioningArtifact(PHP, "8.3.0", data)
+	artifact.GOOS = ""
+	artifact.GOARCH = ""
+	artifact.Target = Platform{OS: "linux", Arch: "amd64", Distribution: "ubuntu-24.04", Libc: "glibc"}
+	p := Provisioner{Catalog: CatalogPayload{SchemaVersion: 1, Artifacts: []Artifact{artifact}}, Cache: ArtifactCache{Root: t.TempDir()}, GOOS: "linux", GOARCH: "amd64"}
+	report := p.Provision(context.Background(), []ToolRequest{{Name: PHP, Version: "8.3.0"}}, ProvisionOptions{Offline: true})
+	if report.Ready || !strings.Contains(report.Results[0].Error, "no artifact") {
+		t.Fatalf("unspecified target report = %#v, want missing artifact", report)
+	}
+}
+
 func provisioningArtifact(tool ToolName, version string, data []byte) Artifact {
 	return Artifact{
 		Tool:       tool,
