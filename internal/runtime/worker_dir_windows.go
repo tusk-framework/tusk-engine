@@ -20,6 +20,10 @@ type windowsWorkerDirectory struct {
 	runtimePath string
 }
 
+func keepWorkerIdentity(*os.File) *os.File {
+	return nil
+}
+
 func openWorkerDirectory(root string) (workerDirectory, error) {
 	d := &windowsWorkerDirectory{rootPath: root}
 	d.tuskPath = filepath.Join(root, ".tusk")

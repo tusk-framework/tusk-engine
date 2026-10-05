@@ -19,6 +19,10 @@ type unixWorkerDirectory struct {
 	runtimePath string
 }
 
+func keepWorkerIdentity(file *os.File) *os.File {
+	return file
+}
+
 func openWorkerDirectory(root string) (workerDirectory, error) {
 	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {

@@ -32,6 +32,7 @@ type WorkerFile struct {
 	RelativePath string
 	ownedPath    string
 	identity     os.FileInfo
+	handle       *os.File
 	directory    workerDirectory
 	quarantine   string
 }
@@ -111,7 +112,12 @@ func writeWorkerWithHooks(root string, hooks workerHooks) (WorkerFile, error) {
 	if err != nil {
 		return zero, fmt.Errorf("create temporary worker: %w", err)
 	}
-	defer temporary.Close()
+	keepTemporary := false
+	defer func() {
+		if !keepTemporary {
+			_ = temporary.Close()
+		}
+	}()
 	identity, err := temporary.Stat()
 	if err != nil {
 		return zero, fmt.Errorf("inspect temporary worker: %w", err)
@@ -148,10 +154,14 @@ func writeWorkerWithHooks(root string, hooks workerHooks) (WorkerFile, error) {
 	if err := directory.Publish(temporary, temporaryName); err != nil {
 		return zero, fmt.Errorf("publish worker without replacing an existing file: %w", err)
 	}
-	_ = temporary.Close()
+	identityHandle := keepWorkerIdentity(temporary)
 	published, err := directory.Stat("worker.php")
 	if err != nil || !os.SameFile(identity, published) {
 		return zero, fmt.Errorf("published worker identity changed")
+	}
+	if identityHandle == nil {
+		_ = temporary.Close()
+		keepTemporary = true
 	}
 	if hooks.afterPublish != nil {
 		hooks.afterPublish()
@@ -161,7 +171,7 @@ func writeWorkerWithHooks(root string, hooks workerHooks) (WorkerFile, error) {
 		return zero, fmt.Errorf("published worker was replaced before ownership could be returned")
 	}
 	destination := filepath.Join(absoluteRoot, filepath.FromSlash(workerRelativePath))
-	worker := WorkerFile{Path: destination, RelativePath: workerRelativePath, ownedPath: destination, identity: identity, directory: directory}
+	worker := WorkerFile{Path: destination, RelativePath: workerRelativePath, ownedPath: destination, identity: identity, handle: identityHandle, directory: directory}
 	if !directory.StillAtPath() {
 		if cleanupErr := worker.Cleanup(); cleanupErr != nil {
 			return zero, fmt.Errorf("runtime directory moved during worker publication; cleanup: %w", cleanupErr)
@@ -169,6 +179,9 @@ func writeWorkerWithHooks(root string, hooks workerHooks) (WorkerFile, error) {
 		return zero, fmt.Errorf("runtime directory moved during worker publication")
 	}
 	keepDirectory = true
+	if identityHandle != nil {
+		keepTemporary = true
+	}
 	return worker, nil
 }
 
@@ -241,6 +254,10 @@ func (f *WorkerFile) preserveQuarantine(name string) {
 }
 
 func (f *WorkerFile) finishCleanup() {
+	if f.handle != nil {
+		_ = f.handle.Close()
+		f.handle = nil
+	}
 	_ = f.directory.Close()
 	f.directory = nil
 	f.identity = nil
