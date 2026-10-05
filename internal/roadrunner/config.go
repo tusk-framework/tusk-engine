@@ -95,8 +95,10 @@ func Project(cfg *config.Config) ([]byte, error) {
 		Command: command,
 		Relay:   "pipes",
 	}
+	logConfig := logsConfig{Mode: "production", Level: "warn"}
 	if debugPath, ok := os.LookupEnv("TUSK_WORKER_DEBUG_PATH"); ok && strings.TrimSpace(debugPath) != "" {
 		server.Env = map[string]string{"TUSK_WORKER_DEBUG_PATH": debugPath}
+		logConfig = logsConfig{Mode: "development", Level: "debug"}
 	}
 
 	projected := fileConfig{
@@ -119,10 +121,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 		},
 		Status: statusConfig{Address: cfg.Runtime.StatusAddress},
 		RPC:    rpcConfig{Listen: cfg.Runtime.RPCAddress},
-		Logs: logsConfig{
-			Mode:  "production",
-			Level: "warn",
-		},
+		Logs:   logConfig,
 	}
 	projected.Metrics = &metricsConfig{Address: cfg.Runtime.MetricsAddress}
 
