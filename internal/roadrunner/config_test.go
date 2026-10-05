@@ -51,8 +51,8 @@ func TestProjectIgnoresLegacyWorkerCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(projected), "command: php .tusk/runtime/worker.php") || strings.Contains(string(projected), "custom-php") {
-		t.Fatalf("legacy worker reached RoadRunner: %s", projected)
+	if !strings.Contains(string(projected), "command: custom-php .tusk/runtime/worker.php") || strings.Contains(string(projected), "command: worker.php") {
+		t.Fatalf("configured PHP binary or generated worker contract is wrong: %s", projected)
 	}
 }
 

@@ -254,6 +254,7 @@ try {
     $config['address'] = '127.0.0.1'
     $config['port'] = $httpPort
     $config['worker_count'] = 1
+    $config['php_binary'] = $php
     $config['control']['enabled'] = $true
     $config['control']['address'] = '127.0.0.1'
     $config['control']['port'] = $controlPort

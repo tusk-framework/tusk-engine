@@ -62,6 +62,8 @@ type metricsConfig struct {
 	Address string `yaml:"address"`
 }
 
+const generatedWorkerPath = ".tusk/runtime/worker.php"
+
 // Project renders the canonical Tusk configuration as a RoadRunner v3 file.
 func Project(cfg *config.Config) ([]byte, error) {
 	if cfg == nil {
@@ -83,7 +85,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 		return nil, err
 	}
 
-	command := "php .tusk/runtime/worker.php"
+	command := fmt.Sprintf("%s %s", cfg.PhpBinary, generatedWorkerPath)
 	address := strings.TrimSpace(cfg.Address)
 	if address == "" {
 		address = "127.0.0.1"
