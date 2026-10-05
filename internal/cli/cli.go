@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +21,7 @@ import (
 	"github.com/tusk-framework/tusk-engine/internal/control"
 	engine "github.com/tusk-framework/tusk-engine/internal/engine"
 	"github.com/tusk-framework/tusk-engine/internal/metrics"
+	"github.com/tusk-framework/tusk-engine/internal/migration"
 	"github.com/tusk-framework/tusk-engine/internal/php"
 	"github.com/tusk-framework/tusk-engine/internal/roadrunner"
 	engineRuntime "github.com/tusk-framework/tusk-engine/internal/runtime"
@@ -43,19 +45,8 @@ func Run(args []string) {
 	case "start", "dev":
 		// Both commands start the managed RoadRunner runtime.
 		// "dev" is an alias for "start" to provide familiar npm/bun-style experience.
-		// Check if a custom worker file is specified
-		// args[0] = binary name, args[1] = "start"/"dev", args[2] = optional worker file
-		if len(args) >= 3 {
-			workerFile := args[2]
-			// Validate the worker file exists
-			if _, err := os.Stat(workerFile); os.IsNotExist(err) {
-				log.Fatalf("Worker file not found: %s", workerFile)
-			}
-			// Validate it has a .php extension
-			if !strings.HasSuffix(strings.ToLower(workerFile), ".php") {
-				log.Fatalf("Worker file must be a PHP file (*.php): %s", workerFile)
-			}
-			cfg.WorkerCommand = workerFile
+		if err := validateStartArgs(args[2:]); err != nil {
+			log.Fatalf("Runtime failed: %v", err)
 		}
 		if err := runServerWithConfig(cfg); err != nil {
 			log.Fatalf("Runtime failed: %v", err)
@@ -68,6 +59,10 @@ func Run(args []string) {
 		}
 	case "doctor":
 		runDoctor(cfg, args[2:])
+	case "migrate":
+		if err := runMigrateTo(cfg, args[2:], os.Stdout); err != nil {
+			log.Fatalf("Migration failed: %v", err)
+		}
 	case "toolchain":
 		runToolchainCommand(cfg, args[2:])
 	case "install":
@@ -125,11 +120,12 @@ func RunWithExitCode(args []string) int {
 func printHelp() {
 	fmt.Println("Tusk Engine (v0.1)")
 	fmt.Println("\nUsage:")
-	fmt.Println("  tusk start [worker-file]  Start RoadRunner under Engine control")
-	fmt.Println("  tusk dev [worker-file]    Start RoadRunner (alias for start)")
+	fmt.Println("  tusk start                Start RoadRunner under Engine control")
+	fmt.Println("  tusk dev                  Start RoadRunner (alias for start)")
 	fmt.Println("  tusk setup                Verify and setup environment")
 	fmt.Println("  tusk setup --toolchain    Provision an explicit verified toolchain")
-	fmt.Println("  tusk doctor [--json]      Diagnose PHP, Composer, and RoadRunner")
+	fmt.Println("  tusk doctor [--json]      Diagnose project entrypoint and toolchain")
+	fmt.Println("  tusk migrate              Create missing modern files for a legacy worker")
 	fmt.Println("  tusk toolchain list       Show the resolved project toolchain")
 	fmt.Println("  tusk toolchain pin X@V    Pin a tool version in .tusk/toolchain.json")
 	fmt.Println("  tusk init                 Initialize a new tusk.json file")
@@ -146,7 +142,6 @@ func printHelp() {
 	fmt.Println("\nExamples:")
 	fmt.Println("  tusk start                # Start the high-performance tusk server")
 	fmt.Println("  tusk dev                  # Same as start - use tusk server, not php -S")
-	fmt.Println("  tusk start custom.php     # Uses custom.php as worker")
 	fmt.Println("  tusk install              # Install dependencies from composer.json")
 	fmt.Println("  tusk add symfony/console  # Add a package")
 	fmt.Println("  tusk run test             # Run test script (explicit)")
@@ -220,12 +215,21 @@ func runDoctorToWith(cfg *config.Config, args []string, output io.Writer, diagno
 		return err
 	}
 	report, err := diagnose(cfg)
+	diagnoseErr := err
+	project, err := migration.Detect(cfg.ProjectRoot)
 	if err != nil {
+		if diagnoseErr != nil {
+			return errors.Join(diagnoseErr, err)
+		}
 		return err
 	}
 
 	if jsonOutput {
-		data, err := json.MarshalIndent(report, "", "  ")
+		data, err := json.MarshalIndent(struct {
+			toolchain.Report
+			Project        migration.Detection `json:"project"`
+			ToolchainError string              `json:"toolchain_error,omitempty"`
+		}{report, project, errorString(diagnoseErr)}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encode toolchain report: %w", err)
 		}
@@ -242,11 +246,45 @@ func runDoctorToWith(cfg *config.Config, args []string, output io.Writer, diagno
 		}
 		_, _ = fmt.Fprintf(output, "%-10s %-17s %s\n", tool.Name, tool.Status, tool.Error)
 	}
+	if diagnoseErr != nil {
+		_, _ = fmt.Fprintf(output, "\nToolchain diagnosis error: %v\n", diagnoseErr)
+	}
 	if report.Ready {
 		_, err = fmt.Fprintln(output, "\nToolchain is ready.")
 	} else {
 		_, err = fmt.Fprintln(output, "\nToolchain is incomplete. Install the missing tools or add project-local paths to .tusk/toolchain.json.")
 	}
+	if err != nil {
+		return err
+	}
+	projectErr := writeProjectDiagnosis(output, project)
+	if diagnoseErr != nil {
+		return errors.Join(diagnoseErr, projectErr)
+	}
+	return projectErr
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func runMigrateTo(cfg *config.Config, args []string, output io.Writer) error {
+	if len(args) != 0 {
+		return fmt.Errorf("usage: tusk migrate")
+	}
+	created, err := migration.Migrate(cfg.ProjectRoot)
+	for _, path := range created {
+		if _, writeErr := fmt.Fprintf(output, "Created %s\n", path); writeErr != nil {
+			return writeErr
+		}
+	}
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(output, "Review the created bootstrap, providers, and routes; move root worker.php aside before tusk start. The RoadRunner worker is generated by tusk start.")
 	return err
 }
 
@@ -334,7 +372,130 @@ func runToolchainSetupCode(cfg *config.Config, args []string, output, errorsOutp
 	return 0
 }
 
+func validateStartArgs(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("custom worker arguments are no longer supported; add bootstrap/app.php from the modern project skeleton and run `tusk start`")
+	}
+	return nil
+}
+
+func validateBootstrap(cfg *config.Config) error {
+	return validateBootstrapWithTimeout(cfg, 5*time.Second)
+}
+
+func validateBootstrapWithTimeout(cfg *config.Config, timeout time.Duration) error {
+	path := filepath.Join(cfg.ProjectRoot, "bootstrap", "app.php")
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return fmt.Errorf("application bootstrap required at %s; run `tusk doctor` for project diagnostics, `tusk init` for a new project, or add bootstrap/app.php before `tusk start`", path)
+	}
+	resultFile, err := os.CreateTemp("", "tusk-bootstrap-validation-*")
+	if err != nil {
+		return fmt.Errorf("create bootstrap validation result: %w", err)
+	}
+	resultPath := resultFile.Name()
+	if err := resultFile.Close(); err != nil {
+		_ = os.Remove(resultPath)
+		return fmt.Errorf("close bootstrap validation result: %w", err)
+	}
+	if err := os.Remove(resultPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("prepare bootstrap validation result: %w", err)
+	}
+	defer func() { _ = os.Remove(resultPath) }()
+
+	phpCode := `$application = null;
+$completed = false;
+$resultPath = getenv('TUSK_BOOTSTRAP_RESULT');
+register_shutdown_function(function () use (&$application, &$completed, $resultPath) {
+    if ($completed) {
+        return;
+    }
+    $type = $application === null ? 'none' : get_debug_type($application);
+    @file_put_contents($resultPath, 'invalid:' . $type);
+});
+require 'vendor/autoload.php';
+$application = require 'bootstrap/app.php';
+if (!$application instanceof \Tusk\Foundation\Application) {
+    @file_put_contents($resultPath, 'invalid:' . get_debug_type($application));
+    $completed = true;
+    exit(78);
+}
+@file_put_contents($resultPath, 'valid');
+$completed = true;`
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, cfg.PhpBinary, "-r", phpCode)
+	command.WaitDelay = 250 * time.Millisecond
+	command.Dir = cfg.ProjectRoot
+	command.Env = append(os.Environ(), "TUSK_BOOTSTRAP_RESULT="+resultPath)
+	output, err := command.CombinedOutput()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("validate %s timed out after %s", path, timeout)
+	}
+	status, readErr := os.ReadFile(resultPath)
+	statusText := strings.TrimSpace(string(status))
+	if strings.HasPrefix(statusText, "invalid:") {
+		typeName := strings.TrimPrefix(statusText, "invalid:")
+		if typeName == "none" || typeName == "" {
+			return fmt.Errorf("%s did not return a Tusk\\Foundation\\Application instance", path)
+		}
+		return fmt.Errorf("%s returned %s; expected Tusk\\Foundation\\Application", path, typeName)
+	}
+	if statusText != "valid" {
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return fmt.Errorf("validate %s: read result: %w", path, readErr)
+		}
+		if strings.TrimSpace(string(output)) != "" {
+			return fmt.Errorf("validate %s: %s", path, strings.TrimSpace(string(output)))
+		}
+		if err != nil {
+			return fmt.Errorf("validate %s: %w", path, err)
+		}
+		return fmt.Errorf("%s did not return a Tusk\\Foundation\\Application instance", path)
+	}
+	if err != nil {
+		return fmt.Errorf("validate %s: %s: %w", path, strings.TrimSpace(string(output)), err)
+	}
+	return nil
+}
+
+func rejectLegacyWorker(root string) error {
+	result, err := migration.Detect(root)
+	if err != nil {
+		return err
+	}
+	if result.State == migration.Legacy {
+		return fmt.Errorf("legacy root worker %s is not a production entrypoint; run `tusk doctor` and `tusk migrate`, then move worker.php aside before `tusk start`", filepath.Join(root, "worker.php"))
+	}
+	return nil
+}
+
+func stopManagedRuntime(manager *engineRuntime.Manager, stopControl func(context.Context) error) (bool, error) {
+	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
+	managerErr := manager.Stop(shutdownContext)
+	var controlErr error
+	if stopControl != nil {
+		controlErr = stopControl(shutdownContext)
+	}
+	if managerErr != nil {
+		stopErr := fmt.Errorf("stop RoadRunner: %w", managerErr)
+		if controlErr != nil {
+			stopErr = errors.Join(stopErr, fmt.Errorf("stop control server: %w", controlErr))
+		}
+		return false, stopErr
+	}
+	if controlErr != nil {
+		return true, fmt.Errorf("stop control server: %w", controlErr)
+	}
+	return true, nil
+}
+
 func runServerWithConfig(cfg *config.Config) error {
+	return runServerWithConfigUsing(cfg, engineRuntime.ExecProcessFactory{Stdout: os.Stdout, Stderr: os.Stderr}, toolchain.ResolveExecutable)
+}
+
+func runServerWithConfigUsing(cfg *config.Config, factory engineRuntime.ProcessFactory, resolve func(string, toolchain.ToolName) (toolchain.Tool, error)) (result error) {
 	if cfg == nil {
 		return fmt.Errorf("configuration is required")
 	}
@@ -348,12 +509,33 @@ func runServerWithConfig(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("initialize component registry: %w", err)
 	}
+	if err := rejectLegacyWorker(cfg.ProjectRoot); err != nil {
+		return err
+	}
+	if err := validateBootstrap(cfg); err != nil {
+		return err
+	}
 
-	resolved, err := toolchain.ResolveExecutable(cfg.ProjectRoot, toolchain.RoadRunner)
+	resolved, err := resolve(cfg.ProjectRoot, toolchain.RoadRunner)
 	if err != nil {
 		return fmt.Errorf("resolve RoadRunner: %w", err)
 	}
-	projected, err := roadrunner.Project(cfg)
+	worker, err := engineRuntime.WriteWorker(cfg.ProjectRoot)
+	if err != nil {
+		return fmt.Errorf("create generated worker: %w", err)
+	}
+	cleanupAllowed := true
+	defer func() {
+		if !cleanupAllowed {
+			return
+		}
+		if cleanupErr := worker.Cleanup(); cleanupErr != nil {
+			result = errors.Join(result, fmt.Errorf("clean generated worker: %w", cleanupErr))
+		}
+	}()
+	projectConfig := *cfg
+	projectConfig.WorkerCommand = worker.RelativePath
+	projected, err := roadrunner.Project(&projectConfig)
 	if err != nil {
 		return fmt.Errorf("project RoadRunner configuration: %w", err)
 	}
@@ -361,10 +543,16 @@ func runServerWithConfig(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = configFile.Cleanup() }()
+	defer func() {
+		if cleanupAllowed {
+			if cleanupErr := configFile.Cleanup(); cleanupErr != nil {
+				result = errors.Join(result, fmt.Errorf("clean RoadRunner config: %w", cleanupErr))
+			}
+		}
+	}()
 
 	manager := engineRuntime.NewManager(
-		engineRuntime.ExecProcessFactory{Stdout: os.Stdout, Stderr: os.Stderr},
+		factory,
 		engineRuntime.ProcessSpec{
 			Binary:         resolved.Path,
 			Args:           []string{"serve", "-c", configFile.Path},
@@ -400,11 +588,14 @@ func runServerWithConfig(cfg *config.Config) error {
 		return err
 	}
 	if _, err := app.Start(context.Background()); err != nil {
-		return err
+		return fmt.Errorf("RoadRunner startup failed: %w", err)
 	}
 	defer func() {
 		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = app.Stop(shutdownContext)
+		if stopErr := app.Stop(shutdownContext); stopErr != nil {
+			cleanupAllowed = false
+			result = errors.Join(result, stopErr)
+		}
 		cancelShutdown()
 	}()
 

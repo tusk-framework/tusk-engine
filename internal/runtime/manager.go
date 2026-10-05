@@ -58,6 +58,7 @@ type Manager struct {
 	factory           ProcessFactory
 	spec              ProcessSpec
 	process           Process
+	processDone       chan struct{}
 	state             State
 	startedAt         time.Time
 	stateChangedAt    time.Time
@@ -97,17 +98,20 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.fail(err, "process_failed")
 		return fmt.Errorf("start runtime: %w", err)
 	}
+	processDone := make(chan struct{})
 	m.mu.Lock()
 	m.process = process
+	m.processDone = processDone
 	m.startedAt = time.Now().UTC()
 	m.mu.Unlock()
 	metrics.RoadRunnerStarts.Inc()
-	go m.monitor(process)
+	go m.monitor(process, processDone)
 	return nil
 }
 
-func (m *Manager) monitor(process Process) {
+func (m *Manager) monitor(process Process, processDone chan struct{}) {
 	err := process.Wait()
+	close(processDone)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.process != process || m.state == StateStopping || m.state == StateStopped {
@@ -205,7 +209,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 		return fmt.Errorf("cannot stop runtime from state %q", state)
 	}
 	process := m.process
-	wasFailed := m.state == StateFailed
+	processDone := m.processDone
 	m.state = StateStopping
 	m.stateChangedAt = time.Now().UTC()
 	m.mu.Unlock()
@@ -215,15 +219,49 @@ func (m *Manager) Stop(ctx context.Context) error {
 		metrics.RoadRunnerStops.Inc()
 		return nil
 	}
+	if processDone != nil {
+		select {
+		case <-processDone:
+			m.markStopped()
+			metrics.RoadRunnerStops.Inc()
+			return nil
+		default:
+		}
+	}
 	if err := process.GracefulStop(ctx); err != nil {
-		if killErr := process.Kill(); killErr != nil && !wasFailed {
+		if killErr := process.Kill(); killErr != nil {
 			m.fail(killErr, "process_failed")
 			return fmt.Errorf("stop runtime: %w; kill runtime: %v", err, killErr)
 		}
 	}
+	if err := waitForProcessAfterStop(ctx, processDone); err != nil {
+		m.fail(err, "process_failed")
+		return fmt.Errorf("stop runtime: wait for process: %w", err)
+	}
 	m.markStopped()
 	metrics.RoadRunnerStops.Inc()
 	return nil
+}
+
+func waitForProcessAfterStop(ctx context.Context, processDone <-chan struct{}) error {
+	if ctx.Err() == nil {
+		return waitForProcess(ctx, processDone)
+	}
+	waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return waitForProcess(waitContext, processDone)
+}
+
+func waitForProcess(ctx context.Context, processDone <-chan struct{}) error {
+	if processDone == nil {
+		return errors.New("process completion is not available")
+	}
+	select {
+	case <-processDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (m *Manager) markStopped() {

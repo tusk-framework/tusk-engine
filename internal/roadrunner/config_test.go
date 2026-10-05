@@ -12,7 +12,7 @@ func TestProjectProducesDeterministicRoadRunnerConfig(t *testing.T) {
 	cfg.Address = "127.0.0.1"
 	cfg.Port = 9090
 	cfg.WorkerCount = 6
-	cfg.WorkerCommand = "vendor/bin/tusk run app.php --runtime=roadrunner"
+	cfg.WorkerCommand = "worker.php"
 	cfg.PhpBinary = "php"
 	cfg.MaxBodyBytes = 12 * 1024 * 1024
 
@@ -30,7 +30,7 @@ func TestProjectProducesDeterministicRoadRunnerConfig(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"version: \"3\"",
-		"command: php vendor/bin/tusk run app.php --runtime=roadrunner",
+		"command: php .tusk/runtime/worker.php",
 		"address: 127.0.0.1:9090",
 		"num_workers: 6",
 		"max_request_size: 12",
@@ -40,6 +40,20 @@ func TestProjectProducesDeterministicRoadRunnerConfig(t *testing.T) {
 		if !strings.Contains(string(first), expected) {
 			t.Fatalf("rendered config missing %q:\n%s", expected, first)
 		}
+	}
+}
+
+func TestProjectIgnoresLegacyWorkerCommand(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkerCommand = "worker.php"
+	cfg.PhpBinary = "custom-php"
+	cfg.ProjectRoot = "/srv/tusk-app"
+	projected, err := Project(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(projected), "command: custom-php /srv/tusk-app/.tusk/runtime/worker.php") || strings.Contains(string(projected), "command: worker.php") {
+		t.Fatalf("configured PHP binary or generated worker contract is wrong: %s", projected)
 	}
 }
 

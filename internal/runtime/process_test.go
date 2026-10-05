@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -17,16 +18,30 @@ func TestExecProcessFactoryPropagatesSpecAndSupportsReload(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell process signal semantics differ on Windows")
 	}
+	dir := t.TempDir()
+	readyFile := filepath.Join(dir, "ready")
 	factory := ExecProcessFactory{Stdout: io.Discard, Stderr: io.Discard}
 	process, err := factory.Start(ProcessSpec{
 		Binary:     os.Args[0],
 		Args:       []string{"-test.run=TestExecProcessHelper"},
 		ReloadArgs: []string{"-test.run=TestExecProcessReloadHelper"},
-		Env:        []string{"TUSK_PROCESS_HELPER=1", "TUSK_RELOAD_HELPER=1"},
-		Dir:        t.TempDir(),
+		Env:        []string{"TUSK_PROCESS_HELPER=1", "TUSK_RELOAD_HELPER=1", "TUSK_PROCESS_READY_FILE=" + readyFile},
+		Dir:        dir,
 	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, statErr := os.Stat(readyFile); statErr == nil {
+			break
+		} else if !os.IsNotExist(statErr) {
+			t.Fatalf("stat process readiness file: %v", statErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("process did not signal readiness")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if err := process.Reload(); err != nil {
 		t.Fatalf("Reload() error = %v", err)
@@ -77,6 +92,11 @@ func TestExecProcessHelper(t *testing.T) {
 	}
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	if readyFile := os.Getenv("TUSK_PROCESS_READY_FILE"); readyFile != "" {
+		if err := os.WriteFile(readyFile, []byte("ready\n"), 0o600); err != nil {
+			t.Fatalf("write process readiness file: %v", err)
+		}
+	}
 	<-interrupt
 	os.Exit(0)
 }

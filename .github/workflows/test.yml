@@ -1,0 +1,82 @@
+name: Skeleton smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  skeleton:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Publish this Framework branch before publishing the Engine change.
+      FRAMEWORK_REF: main
+      FRAMEWORK_SHA: e6e3134b73a4d84a5d5f7a8726640832da5c1f1d
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, zip, sockets
+          tools: composer:v2
+
+      - name: Check smoke prerequisites
+        id: prerequisites
+        shell: bash
+        run: |
+          missing=()
+          for tool in php composer go; do
+            command -v "$tool" >/dev/null || missing+=("$tool")
+          done
+          if (( ${#missing[@]} )); then
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo "SKIP skeleton smoke: missing prerequisites: ${missing[*]}"
+          else
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out coordinated modern Framework and install dependencies
+        if: steps.prerequisites.outputs.available == 'true'
+        shell: bash
+        run: |
+          git clone --no-checkout https://github.com/tusk-framework/tusk-framework.git "$RUNNER_TEMP/tusk-framework"
+          cd "$RUNNER_TEMP/tusk-framework"
+          if ! git fetch --depth 1 origin "$FRAMEWORK_REF"; then
+            echo "ERROR: coordinated modern Framework ref $FRAMEWORK_REF is unavailable; publish the Framework branch before the Engine change" >&2
+            exit 1
+          fi
+          resolved_framework_sha=$(git rev-parse FETCH_HEAD)
+          if [[ "$resolved_framework_sha" != "$FRAMEWORK_SHA" ]]; then
+            echo "ERROR: coordinated Framework ref $FRAMEWORK_REF resolved to $resolved_framework_sha, expected immutable contract $FRAMEWORK_SHA; update the Engine pin only after publishing the intended Framework commit" >&2
+            exit 1
+          fi
+          git checkout --detach "$resolved_framework_sha"
+          if ! test -f tusk-cli/stubs/bootstrap-app.stub || ! test -f tusk-cli/src/Generator/ProjectGenerator.php; then
+            echo "ERROR: Framework ref $FRAMEWORK_REF lacks the required modern generator contract" >&2
+            exit 1
+          fi
+          composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Provide RoadRunner
+        if: steps.prerequisites.outputs.available == 'true'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/tusk-tools"
+          curl --fail --location --silent --show-error \
+            https://github.com/roadrunner-server/roadrunner/releases/download/v2025.1.15/roadrunner-2025.1.15-linux-amd64.tar.gz \
+            --output "$RUNNER_TEMP/tusk-tools/roadrunner.tar.gz"
+          tar -xzf "$RUNNER_TEMP/tusk-tools/roadrunner.tar.gz" -C "$RUNNER_TEMP/tusk-tools"
+          mv "$RUNNER_TEMP/tusk-tools/roadrunner-2025.1.15-linux-amd64/rr" "$RUNNER_TEMP/tusk-tools/rr"
+          rm -rf "$RUNNER_TEMP/tusk-tools/roadrunner-2025.1.15-linux-amd64"
+          chmod +x "$RUNNER_TEMP/tusk-tools/rr"
+          echo "$RUNNER_TEMP/tusk-tools" >> "$GITHUB_PATH"
+
+      - name: Run generated skeleton through RoadRunner
+        if: steps.prerequisites.outputs.available == 'true'
+        shell: pwsh
+        run: ./test/skeleton/smoke.ps1 -FrameworkPath "$env:RUNNER_TEMP/tusk-framework" -RoadRunnerPath "$env:RUNNER_TEMP/tusk-tools/rr"

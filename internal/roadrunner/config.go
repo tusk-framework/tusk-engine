@@ -2,6 +2,7 @@ package roadrunner
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/tusk-framework/tusk-engine/internal/config"
@@ -60,6 +61,8 @@ type metricsConfig struct {
 	Address string `yaml:"address"`
 }
 
+const generatedWorkerPath = ".tusk/runtime/worker.php"
+
 // Project renders the canonical Tusk configuration as a RoadRunner v3 file.
 func Project(cfg *config.Config) ([]byte, error) {
 	if cfg == nil {
@@ -74,9 +77,6 @@ func Project(cfg *config.Config) ([]byte, error) {
 	if cfg.MaxBodyBytes <= 0 {
 		return nil, fmt.Errorf("max_body_bytes must be positive")
 	}
-	if strings.TrimSpace(cfg.WorkerCommand) == "" {
-		return nil, fmt.Errorf("worker_command is required")
-	}
 	if strings.TrimSpace(cfg.PhpBinary) == "" {
 		return nil, fmt.Errorf("php_binary is required")
 	}
@@ -84,18 +84,21 @@ func Project(cfg *config.Config) ([]byte, error) {
 		return nil, err
 	}
 
-	command := strings.TrimSpace(cfg.PhpBinary) + " " + strings.TrimSpace(cfg.WorkerCommand)
+	workerPath := filepath.ToSlash(filepath.Join(cfg.ProjectRoot, generatedWorkerPath))
+	command := fmt.Sprintf("%s %s", cfg.PhpBinary, workerPath)
 	address := strings.TrimSpace(cfg.Address)
 	if address == "" {
 		address = "127.0.0.1"
 	}
 
+	server := serverConfig{
+		Command: command,
+		Relay:   "pipes",
+	}
+
 	projected := fileConfig{
 		Version: "3",
-		Server: serverConfig{
-			Command: command,
-			Relay:   "pipes",
-		},
+		Server:  server,
 		HTTP: httpConfig{
 			Address:        fmt.Sprintf("%s:%d", address, cfg.Port),
 			MaxRequestSize: (cfg.MaxBodyBytes + 1024*1024 - 1) / (1024 * 1024),
