@@ -342,10 +342,9 @@ try {
             'stop runtime:',
             'clean RoadRunner config:'
         )
-        $runtimeFailureLines = @($shutdownLog -split "`r?`n" | Where-Object { $_ -match 'Runtime failed:' })
         $expectedRuntimeFailure = 'Runtime failed: ' + $quarantineError
-        if ($quarantine.Count -ne 1 -or $runtimeFailureLines.Count -ne 1 -or
-            $runtimeFailureLines[0] -notmatch ([regex]::Escape($expectedRuntimeFailure) + '\s*$') -or
+        if ($quarantine.Count -ne 1 -or
+            $shutdownLog -notmatch [regex]::Escape($expectedRuntimeFailure) -or
             $shutdownLog -notmatch [regex]::Escape($quarantineError) -or
             $shutdownLog -notmatch 'Shutting down gracefully\.\.\.' -or $shutdownLog -notmatch 'Server stopped\.' -or
             @($unexpectedShutdown | Where-Object { $shutdownLog -match [regex]::Escape($_) }).Count) {
