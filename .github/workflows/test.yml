@@ -1,0 +1,58 @@
+name: Skeleton smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  skeleton:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, zip, sockets
+          tools: composer:v2
+
+      - name: Check out Framework and install its dependencies
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/tusk-framework/tusk-framework.git "$RUNNER_TEMP/tusk-framework"
+          cd "$RUNNER_TEMP/tusk-framework"
+          composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Provide RoadRunner
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/tusk-tools"
+          curl --fail --location --silent --show-error \
+            https://github.com/roadrunner-server/roadrunner/releases/download/v2025.1.15/roadrunner-2025.1.15-linux-amd64.tar.gz \
+            --output "$RUNNER_TEMP/tusk-tools/roadrunner.tar.gz"
+          tar -xzf "$RUNNER_TEMP/tusk-tools/roadrunner.tar.gz" -C "$RUNNER_TEMP/tusk-tools" rr
+          chmod +x "$RUNNER_TEMP/tusk-tools/rr"
+          echo "$RUNNER_TEMP/tusk-tools" >> "$GITHUB_PATH"
+
+      - name: Check smoke prerequisites
+        id: prerequisites
+        shell: bash
+        run: |
+          if command -v php && command -v composer && command -v rr && \
+             test -f "$RUNNER_TEMP/tusk-framework/vendor/autoload.php" && \
+             test -f "$RUNNER_TEMP/tusk-framework/tusk-cli/stubs/bootstrap-app.stub"; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo 'SKIP skeleton smoke: PHP, Composer, RoadRunner, Framework dependencies, or modern Framework generator unavailable'
+          fi
+
+      - name: Run generated skeleton through RoadRunner
+        if: steps.prerequisites.outputs.available == 'true'
+        shell: pwsh
+        run: ./test/skeleton/smoke.ps1 -FrameworkPath "$env:RUNNER_TEMP/tusk-framework" -RoadRunnerPath "$env:RUNNER_TEMP/tusk-tools/rr"
