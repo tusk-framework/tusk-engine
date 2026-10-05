@@ -4,6 +4,9 @@ The **Tusk Engine** is the Go control plane for the Tusk Framework and its RoadR
 
 The embedded native HTTP/NDJSON server is a frozen migration-era implementation detail. New deployments use RoadRunner; the native path is not a second supported platform architecture.
 
+[Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
+[Security](SECURITY.md)
+
 ## Features
 
 - **Runtime Control**: Validates, starts, monitors, reloads, and stops RoadRunner without duplicating its worker pool.
@@ -64,6 +67,17 @@ export PATH="$HOME/.tusk:$PATH"
 
 > [!NOTE]
 > After installation, restart your terminal (or run `source ~/.bashrc`) to ensure `tusk` is available on your PATH.
+
+## Contributing and releases
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development environment,
+project boundaries, test commands, Conventional Commits, and pull request
+expectations. Community participation follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Engine releases are published from versioned Git tags after the required CI
+checks pass. Catalog signing credentials remain in GitHub Actions secrets and
+public trust anchors remain repository variables; private signing material is
+never committed to this repository.
 
 ## Manual Build
 ```bash
