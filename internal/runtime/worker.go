@@ -15,6 +15,7 @@ const workerContents = `<?php
 
 ini_set('display_errors', 'stderr');
 ini_set('log_errors', '1');
+fwrite(STDERR, "TUSK_WORKER_BOOTSTRAP\n");
 
 $workerDebugPath = getenv('TUSK_WORKER_DEBUG_PATH');
 if ($workerDebugPath !== false && $workerDebugPath !== '') {
