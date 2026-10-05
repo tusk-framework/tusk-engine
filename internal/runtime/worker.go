@@ -15,17 +15,6 @@ const workerContents = `<?php
 
 ini_set('display_errors', 'stderr');
 ini_set('log_errors', '1');
-fwrite(STDERR, "TUSK_WORKER_BOOTSTRAP\n");
-
-$workerDebugPath = getenv('TUSK_WORKER_DEBUG_PATH');
-if ($workerDebugPath !== false && $workerDebugPath !== '') {
-    register_shutdown_function(static function () use ($workerDebugPath): void {
-        $error = error_get_last();
-        if ($error !== null) {
-            @file_put_contents($workerDebugPath, json_encode($error, JSON_UNESCAPED_SLASHES) . PHP_EOL, FILE_APPEND);
-        }
-    });
-}
 
 require dirname(__DIR__, 2) . '/vendor/autoload.php';
 

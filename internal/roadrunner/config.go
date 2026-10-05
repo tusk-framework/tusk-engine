@@ -2,7 +2,6 @@ package roadrunner
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -21,9 +20,8 @@ type fileConfig struct {
 }
 
 type serverConfig struct {
-	Command string            `yaml:"command"`
-	Relay   string            `yaml:"relay"`
-	Env     map[string]string `yaml:"env,omitempty"`
+	Command string `yaml:"command"`
+	Relay   string `yaml:"relay"`
 }
 
 type httpConfig struct {
@@ -97,11 +95,6 @@ func Project(cfg *config.Config) ([]byte, error) {
 		Command: command,
 		Relay:   "pipes",
 	}
-	logConfig := logsConfig{Mode: "production", Level: "warn"}
-	if debugPath, ok := os.LookupEnv("TUSK_WORKER_DEBUG_PATH"); ok && strings.TrimSpace(debugPath) != "" {
-		server.Env = map[string]string{"TUSK_WORKER_DEBUG_PATH": debugPath}
-		logConfig = logsConfig{Mode: "development", Level: "debug"}
-	}
 
 	projected := fileConfig{
 		Version: "3",
@@ -123,7 +116,10 @@ func Project(cfg *config.Config) ([]byte, error) {
 		},
 		Status: statusConfig{Address: cfg.Runtime.StatusAddress},
 		RPC:    rpcConfig{Listen: cfg.Runtime.RPCAddress},
-		Logs:   logConfig,
+		Logs: logsConfig{
+			Mode:  "production",
+			Level: "warn",
+		},
 	}
 	projected.Metrics = &metricsConfig{Address: cfg.Runtime.MetricsAddress}
 
