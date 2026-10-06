@@ -22,18 +22,13 @@ type Config struct {
 	Runtime    RuntimeConfig                       `json:"runtime"`
 	Components map[string]components.Configuration `json:"components,omitempty"`
 
-	// Worker configuration
-	WorkerCount    int               `json:"worker_count"`
-	WorkerCommand  string            `json:"worker_command"`
-	PhpBinary      string            `json:"php_binary"`
-	PhpIni         string            `json:"php_ini"`
-	ProjectRoot    string            `json:"project_root"`
-	PublicDir      string            `json:"public_dir"`
-	Timeout        int               `json:"timeout"`
-	MaxBodyBytes   int64             `json:"max_body_bytes"`
-	MaxUploadBytes int64             `json:"max_upload_bytes"`
-	MaxUploadFiles int               `json:"max_upload_files"`
-	Scripts        map[string]string `json:"scripts"`
+	// RoadRunner and project configuration
+	WorkerCount  int               `json:"worker_count"`
+	PhpBinary    string            `json:"php_binary"`
+	ProjectRoot  string            `json:"project_root"`
+	Timeout      int               `json:"timeout"`
+	MaxBodyBytes int64             `json:"max_body_bytes"`
+	Scripts      map[string]string `json:"scripts"`
 
 	// Package management (from composer.json)
 	Name             string                       `json:"name,omitempty"`
@@ -238,17 +233,12 @@ func DefaultConfig() *Config {
 			StartupTimeout: defaultRuntimeStartup,
 			ProbeInterval:  defaultRuntimeProbeInterval,
 		},
-		WorkerCount:    4, // Default to a reasonable number
-		WorkerCommand:  ".tusk/runtime/worker.php",
-		PhpBinary:      "php",
-		PhpIni:         "", // Empty means use system default
-		ProjectRoot:    "./",
-		PublicDir:      "public",
-		Timeout:        30,
-		MaxBodyBytes:   defaultRequestLimit,
-		MaxUploadBytes: defaultRequestLimit,
-		MaxUploadFiles: 20,
-		Scripts:        make(map[string]string),
+		WorkerCount:  4,
+		PhpBinary:    "php",
+		ProjectRoot:  "./",
+		Timeout:      30,
+		MaxBodyBytes: defaultRequestLimit,
+		Scripts:      make(map[string]string),
 	}
 }
 
@@ -293,12 +283,6 @@ func loadConfigFromDir(root string) (*Config, error) {
 	if _, present := raw["max_body_bytes"]; present && overlay.MaxBodyBytes <= 0 {
 		return cfg, fmt.Errorf("max_body_bytes must be positive")
 	}
-	if _, present := raw["max_upload_bytes"]; present && overlay.MaxUploadBytes <= 0 {
-		return cfg, fmt.Errorf("max_upload_bytes must be positive")
-	}
-	if _, present := raw["max_upload_files"]; present && overlay.MaxUploadFiles <= 0 {
-		return cfg, fmt.Errorf("max_upload_files must be positive")
-	}
 	if runtimeRaw, present := raw["runtime"]; present {
 		if err := validateExplicitRuntimeTiming(runtimeRaw); err != nil {
 			return cfg, err
@@ -332,32 +316,17 @@ func mergeConfig(dst, overlay *Config) {
 	if overlay.WorkerCount != 0 {
 		dst.WorkerCount = overlay.WorkerCount
 	}
-	if overlay.WorkerCommand != "" {
-		dst.WorkerCommand = overlay.WorkerCommand
-	}
 	if overlay.PhpBinary != "" {
 		dst.PhpBinary = overlay.PhpBinary
 	}
-	if overlay.PhpIni != "" {
-		dst.PhpIni = overlay.PhpIni
-	}
 	if overlay.ProjectRoot != "" {
 		dst.ProjectRoot = overlay.ProjectRoot
-	}
-	if overlay.PublicDir != "" {
-		dst.PublicDir = overlay.PublicDir
 	}
 	if overlay.Timeout != 0 {
 		dst.Timeout = overlay.Timeout
 	}
 	if overlay.MaxBodyBytes != 0 {
 		dst.MaxBodyBytes = overlay.MaxBodyBytes
-	}
-	if overlay.MaxUploadBytes != 0 {
-		dst.MaxUploadBytes = overlay.MaxUploadBytes
-	}
-	if overlay.MaxUploadFiles != 0 {
-		dst.MaxUploadFiles = overlay.MaxUploadFiles
 	}
 	if overlay.Runtime.StatusAddress != "" {
 		dst.Runtime.StatusAddress = overlay.Runtime.StatusAddress
@@ -422,8 +391,8 @@ func mergeScripts(base, overlay map[string]string) map[string]string {
 }
 
 func validateConfig(cfg *Config) error {
-	if cfg.MaxBodyBytes <= 0 || cfg.MaxUploadBytes <= 0 || cfg.MaxUploadFiles <= 0 {
-		return fmt.Errorf("request limits must be positive")
+	if cfg.MaxBodyBytes <= 0 {
+		return fmt.Errorf("max_body_bytes must be positive")
 	}
 	if err := cfg.Runtime.Validate(); err != nil {
 		return err

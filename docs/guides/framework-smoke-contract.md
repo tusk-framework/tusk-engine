@@ -1,22 +1,21 @@
 # Cross-repository skeleton smoke contract
 
-The Engine skeleton smoke test consumes the Framework from the coordinated
-branch `codex/tusk-bootstrap` at the exact commit recorded in
-`.github/workflows/test.yml` as `FRAMEWORK_SHA`.
+The Engine skeleton smoke test consumes the Framework from the published
+`main` ref configured in `.github/workflows/test.yml` and verifies that the
+resolved checkout contains the modern generator contract.
 
 Publication order is deliberate:
 
-1. Commit and publish the Framework branch `codex/tusk-bootstrap`.
-2. Confirm that the published branch resolves to `FRAMEWORK_SHA`.
-3. Publish the Engine change that contains the matching branch and SHA.
+1. Publish the Framework generator contract on `main`.
+2. Confirm that the smoke workflow resolves and validates that ref.
+3. Run the Engine smoke workflow against the resolved checkout.
 
-The workflow fetches the named branch and verifies its resolved tip before
-checking out the Framework. If the branch is absent or has moved, CI fails with
-an actionable error. It does not fetch a local-only object and does not fall
-back to the legacy Framework.
+The workflow fetches the named ref and validates the required generator files
+before checking out the Framework. If the ref is absent or the contract is
+missing, CI fails with an actionable error.
 
 The smoke test therefore exercises the same contract documented for runtime:
 `bootstrap/app.php` composes the application, the Engine generates
 `.tusk/runtime/worker.php`, and RoadRunner owns HTTP, Goridge, PHP workers,
 pooling, and shutdown. The Engine owns lifecycle and control-plane behavior;
-legacy migration remains explicit.
+the modern contract is the only supported project path.

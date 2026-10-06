@@ -12,7 +12,6 @@ func TestProjectProducesDeterministicRoadRunnerConfig(t *testing.T) {
 	cfg.Address = "127.0.0.1"
 	cfg.Port = 9090
 	cfg.WorkerCount = 6
-	cfg.WorkerCommand = "worker.php"
 	cfg.PhpBinary = "php"
 	cfg.MaxBodyBytes = 12 * 1024 * 1024
 
@@ -43,9 +42,8 @@ func TestProjectProducesDeterministicRoadRunnerConfig(t *testing.T) {
 	}
 }
 
-func TestProjectIgnoresLegacyWorkerCommand(t *testing.T) {
+func TestProjectUsesGeneratedWorkerPath(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.WorkerCommand = "worker.php"
 	cfg.PhpBinary = "custom-php"
 	cfg.ProjectRoot = "/srv/tusk-app"
 	projected, err := Project(cfg)

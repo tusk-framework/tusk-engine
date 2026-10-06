@@ -4,7 +4,7 @@
 // removes the owned worker through verified file handles. Linux requires
 // O_TMPFILE and atomic linkat publication; if either is unavailable on the
 // filesystem, WriteWorker fails without publishing. Linux Cleanup removes
-// worker.php from the active path but preserves the quarantine entry under a
+// generated worker from the active path but preserves the quarantine entry under a
 // random .worker-quarantine-* name and returns an error, because POSIX cannot
 // unlink a directory entry conditionally on its inode identity. The caller
 // must arrange exclusive access before manually removing that artifact.

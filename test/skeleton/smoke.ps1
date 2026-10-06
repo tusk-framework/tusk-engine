@@ -236,6 +236,7 @@ try {
     foreach ($relative in @('bootstrap/app.php', 'config/app.php', 'routes/web.php', 'public/index.php', 'composer.json')) {
         if (-not (Test-Path -LiteralPath (Join-Path $project $relative))) { throw "generator omitted $relative" }
     }
+    if (Test-Path -LiteralPath (Join-Path $project 'worker.php')) { throw 'generator supplied a repository-root worker' }
     if (Test-Path -LiteralPath (Join-Path $project '.tusk/runtime/worker.php')) { throw 'generator supplied a runtime worker' }
 
     $composerFile = Join-Path $project 'composer.json'

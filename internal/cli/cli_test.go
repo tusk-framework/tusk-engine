@@ -185,7 +185,6 @@ func TestStartUsesGeneratedWorkerUntilProcessStops(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.ProjectRoot = root
-	cfg.WorkerCommand = "worker.php"
 	factory := &observingFactory{check: func(spec engineRuntime.ProcessSpec) error {
 		if spec.Dir != root || spec.Binary != "rr-test" {
 			t.Fatalf("process spec = %+v", spec)

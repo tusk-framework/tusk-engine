@@ -6,8 +6,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/tusk-framework/tusk-engine/internal/config"
 )
 
 func TestWriteWorkerCreatesPrivateDeterministicApplicationBridge(t *testing.T) {
@@ -164,12 +162,6 @@ func TestWriteWorkerRejectsUnsafeRootsAndSymlinkedRuntime(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "runtime", "worker.php")); !os.IsNotExist(err) {
 		t.Fatalf("worker escaped through symlink: %v", err)
-	}
-}
-
-func TestDefaultWorkerCommandPointsToGeneratedRuntimeWorker(t *testing.T) {
-	if got := config.DefaultConfig().WorkerCommand; got != ".tusk/runtime/worker.php" {
-		t.Fatalf("default worker command = %q", got)
 	}
 }
 

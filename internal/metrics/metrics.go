@@ -4,7 +4,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,58 +12,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Registry contains only Tusk-owned metrics. RoadRunner's native exposition
-// is composed into the protected Control API handler without registering its
+// Registry contains only Tusk-owned metrics. RoadRunner's own exposition is
+// composed into the protected Control API handler without registering its
 // families a second time in this process.
 var Registry = prometheus.NewRegistry()
 
 var (
-	RequestsTotal = promauto.With(Registry).NewCounterVec(prometheus.CounterOpts{
-		Name: "tusk_requests_total",
-		Help: "Total number of HTTP requests processed by the native runtime.",
-	}, []string{"method", "status"})
-
-	RequestDuration = promauto.With(Registry).NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "tusk_request_duration_seconds",
-		Help:    "Request duration in seconds for the native runtime.",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"method", "status"})
-
-	WorkersActive = promauto.With(Registry).NewGauge(prometheus.GaugeOpts{
-		Name: "tusk_workers_active",
-		Help: "Number of native workers currently processing requests.",
-	})
-
-	WorkersTotal = promauto.With(Registry).NewGauge(prometheus.GaugeOpts{
-		Name: "tusk_workers_total",
-		Help: "Total number of native workers in the pool.",
-	})
-
-	WorkerStartsTotal = promauto.With(Registry).NewCounter(prometheus.CounterOpts{
-		Name: "tusk_worker_starts_total",
-		Help: "Total number of PHP worker processes started by the native runtime.",
-	})
-
-	WorkerStopsTotal = promauto.With(Registry).NewCounter(prometheus.CounterOpts{
-		Name: "tusk_worker_stops_total",
-		Help: "Total number of PHP worker processes stopped by the native runtime.",
-	})
-
-	WorkerCrashesTotal = promauto.With(Registry).NewCounter(prometheus.CounterOpts{
-		Name: "tusk_worker_crashes_total",
-		Help: "Total number of unexpected PHP worker exits observed by the native runtime.",
-	})
-
-	WorkerTimeoutsTotal = promauto.With(Registry).NewCounter(prometheus.CounterOpts{
-		Name: "tusk_worker_timeouts_total",
-		Help: "Total number of PHP worker requests that exceeded their timeout.",
-	})
-
-	WorkerQueueDepth = promauto.With(Registry).NewGauge(prometheus.GaugeOpts{
-		Name: "tusk_worker_queue_depth",
-		Help: "Number of PHP workers currently available in the native runtime.",
-	})
-
 	RoadRunnerStarts = promauto.With(Registry).NewCounter(prometheus.CounterOpts{
 		Name: "tusk_roadrunner_starts_total",
 		Help: "Total number of RoadRunner processes successfully started by the Engine.",
@@ -90,34 +43,6 @@ var (
 		Help: "Whether the latest local RoadRunner metrics scrape succeeded.",
 	})
 )
-
-var allowedMethods = map[string]struct{}{
-	"CONNECT": {}, "DELETE": {}, "GET": {}, "HEAD": {}, "OPTIONS": {},
-	"PATCH": {}, "POST": {}, "PUT": {}, "TRACE": {},
-}
-
-// ObserveRequest records a native request with finite method/status labels.
-func ObserveRequest(method string, status int, duration time.Duration) {
-	method = normalizeMethod(method)
-	statusLabel := normalizeStatus(status)
-	RequestsTotal.WithLabelValues(method, statusLabel).Inc()
-	RequestDuration.WithLabelValues(method, statusLabel).Observe(duration.Seconds())
-}
-
-func normalizeMethod(method string) string {
-	method = strings.ToUpper(strings.TrimSpace(method))
-	if _, ok := allowedMethods[method]; !ok {
-		return "OTHER"
-	}
-	return method
-}
-
-func normalizeStatus(status int) string {
-	if status < 100 || status > 599 {
-		return "unknown"
-	}
-	return strconv.Itoa(status)
-}
 
 // NewHandler returns a Prometheus handler that exposes Engine metrics and,
 // when configured, appends the local RoadRunner scrape.
