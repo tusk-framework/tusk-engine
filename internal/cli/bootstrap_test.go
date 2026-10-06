@@ -188,7 +188,7 @@ func TestStartRejectsPositionalWorker(t *testing.T) {
 	}
 }
 
-func TestStartRejectsLegacyRootWorkerEvenWithBootstrap(t *testing.T) {
+func TestStartRejectsInvalidBootstrapEvenWithUnrelatedRootWorker(t *testing.T) {
 	root := t.TempDir()
 	writeBootstrap(t, root, "<?php return new \\stdClass();")
 	writeAutoload(t, root)
@@ -202,8 +202,8 @@ func TestStartRejectsLegacyRootWorkerEvenWithBootstrap(t *testing.T) {
 		t.Fatal("RoadRunner resolved before legacy worker rejection")
 		return toolchain.Tool{}, nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "legacy") || !strings.Contains(err.Error(), "worker.php") || !strings.Contains(err.Error(), "tusk migrate") {
-		t.Fatalf("legacy worker error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "returned stdClass") || strings.Contains(err.Error(), "tusk migrate") || strings.Contains(err.Error(), "legacy") {
+		t.Fatalf("invalid bootstrap error = %v", err)
 	}
 	if factory.started {
 		t.Fatal("RoadRunner started with a root legacy worker")
@@ -230,7 +230,7 @@ func writeAutoload(t *testing.T, root string) {
 	}
 }
 
-func TestStartReportsLegacyRootWorkerWithoutBootstrap(t *testing.T) {
+func TestStartReportsMissingBootstrapWithoutInterpretingRootWorker(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "worker.php"), []byte("<?php"), 0o600); err != nil {
 		t.Fatal(err)
@@ -242,7 +242,7 @@ func TestStartReportsLegacyRootWorkerWithoutBootstrap(t *testing.T) {
 		t.Fatal("RoadRunner resolved before bootstrap validation")
 		return toolchain.Tool{}, nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "worker.php") || !strings.Contains(err.Error(), "tusk migrate") || factory.started {
-		t.Fatalf("legacy project result = %v, started = %t", err, factory.started)
+	if err == nil || !strings.Contains(err.Error(), "bootstrap/app.php") || strings.Contains(err.Error(), "worker.php") || strings.Contains(err.Error(), "tusk migrate") || strings.Contains(err.Error(), "legacy") || factory.started {
+		t.Fatalf("missing bootstrap result = %v, started = %t", err, factory.started)
 	}
 }

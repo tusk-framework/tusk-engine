@@ -21,19 +21,8 @@ projects `php .tusk/runtime/worker.php` as RoadRunner's server command. The
 worker loads Composer and the application once per PHP worker. RoadRunner owns
 HTTP, Goridge, worker pooling, recycling, and process shutdown; the application
 resets request-scoped services after every request. Startup fails on invalid
-bootstrap, missing RoadRunner, or worker publication errors. There is no
-native server or echo-worker fallback.
-
-## Migrating a root worker
-
-A root `worker.php` is not selected implicitly and currently blocks startup.
-Move it out of the project root after reviewing any application setup it
-contains. Add `bootstrap/app.php` from a modern Tusk skeleton so it returns the
-application, place application settings in `config/*.php`, and keep routes and
-`public/index.php` under application ownership. Run `composer install`, then
-`tusk doctor` to diagnose the toolchain and `tusk start` to launch. Review the
-new bootstrap and routes before serving traffic. Automated migration is
-forthcoming.
+bootstrap, missing RoadRunner, or worker publication errors. The Engine does
+not select an alternate request runtime.
 
 ## Generated worker platform limits
 

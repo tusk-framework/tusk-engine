@@ -5,47 +5,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
 
-func TestObserveRequestUsesBoundedMethodAndStatusLabels(t *testing.T) {
-	ObserveRequest("custom-method", 700, time.Millisecond)
-
-	families, err := Registry.Gather()
-	if err != nil {
-		t.Fatalf("Gather() error = %v", err)
-	}
-	for _, name := range []string{"tusk_requests_total", "tusk_request_duration_seconds"} {
-		family := findFamily(families, name)
-		if family == nil || len(family.Metric) == 0 {
-			t.Fatalf("metric family %q was not collected", name)
-		}
-		found := false
-		for _, metric := range family.Metric {
-			labels := make(map[string]string, len(metric.Label))
-			for _, label := range metric.Label {
-				labels[label.GetName()] = label.GetValue()
-			}
-			if labels["method"] == "OTHER" && labels["status"] == "unknown" {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("metric %q did not normalize unbounded labels", name)
-		}
-	}
-}
-
-func TestWorkerAndRoadRunnerCollectorsAreRegistered(t *testing.T) {
+func TestRoadRunnerCollectorsAreRegistered(t *testing.T) {
 	for _, name := range []string{
-		"tusk_worker_starts_total",
-		"tusk_worker_stops_total",
-		"tusk_worker_crashes_total",
-		"tusk_worker_timeouts_total",
-		"tusk_worker_queue_depth",
 		"tusk_roadrunner_starts_total",
 		"tusk_roadrunner_stops_total",
 		"tusk_roadrunner_crashes_total",

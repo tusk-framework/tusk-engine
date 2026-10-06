@@ -11,17 +11,11 @@ import (
 	"github.com/tusk-framework/tusk-engine/internal/components"
 )
 
-func TestDefaultConfigHasSafeRequestLimits(t *testing.T) {
+func TestDefaultConfigHasSafeRequestLimit(t *testing.T) {
 	cfg := DefaultConfig()
 
 	if cfg.MaxBodyBytes != 10*1024*1024 {
 		t.Fatalf("MaxBodyBytes = %d, want %d", cfg.MaxBodyBytes, 10*1024*1024)
-	}
-	if cfg.MaxUploadBytes != 10*1024*1024 {
-		t.Fatalf("MaxUploadBytes = %d, want %d", cfg.MaxUploadBytes, 10*1024*1024)
-	}
-	if cfg.MaxUploadFiles != 20 {
-		t.Fatalf("MaxUploadFiles = %d, want 20", cfg.MaxUploadFiles)
 	}
 }
 

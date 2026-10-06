@@ -19,7 +19,6 @@ go.work
 /release/toolchain-catalog.provenance.json
 config.json
 *.log
-custom-worker.php
 
 # --- PHP ---
 /vendor
