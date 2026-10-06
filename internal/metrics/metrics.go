@@ -12,8 +12,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Registry contains only Tusk-owned metrics. RoadRunner's native exposition
-// is composed into the protected Control API handler without registering its
+// Registry contains only Tusk-owned metrics. RoadRunner's own exposition is
+// composed into the protected Control API handler without registering its
 // families a second time in this process.
 var Registry = prometheus.NewRegistry()
 

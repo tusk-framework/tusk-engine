@@ -199,7 +199,7 @@ func TestStartRejectsInvalidBootstrapEvenWithUnrelatedRootWorker(t *testing.T) {
 	cfg.ProjectRoot = root
 	factory := &observingFactory{}
 	err := runServerWithConfigUsing(cfg, factory, func(string, toolchain.ToolName) (toolchain.Tool, error) {
-		t.Fatal("RoadRunner resolved before legacy worker rejection")
+		t.Fatal("RoadRunner resolved before bootstrap validation")
 		return toolchain.Tool{}, nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "returned stdClass") || strings.Contains(err.Error(), "tusk migrate") || strings.Contains(err.Error(), "legacy") {
