@@ -163,9 +163,10 @@ the Engine process environment. The Engine does not expand or log their values.
 Keep credentials in environment variables, not `tusk.json`.
 
 RoadRunner uses the same `server.command` for its HTTP and Jobs worker pools,
-and sets `RR_MODE` for each worker. The Tusk Framework selects its HTTP or Jobs
-loop from that value, so an HTTP producer and Jobs consumer can run together
-under the Engine-managed RoadRunner process. When `jobs` is absent, the
+sets the Jobs pool size from the Engine's `worker_count`, and sets `RR_MODE` for
+each worker. The Tusk Framework selects its HTTP or Jobs loop from that value,
+so an HTTP producer and Jobs consumer can run together under the Engine-managed
+RoadRunner process. When `jobs` is absent, the
 generated configuration remains HTTP-only. The Engine skeleton smoke exercises
 HTTP dispatch, memory-pipeline consumption, a retried delivery, and graceful
 shutdown across both worker modes.

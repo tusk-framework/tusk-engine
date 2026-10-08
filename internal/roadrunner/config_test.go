@@ -133,7 +133,7 @@ func TestProjectRendersJobsPipelinesDeterministically(t *testing.T) {
 		t.Fatalf("jobs projection is not deterministic:\n%s\n---\n%s", first, second)
 	}
 	contents := string(first)
-	for _, expected := range []string{"jobs:", "consume:", "- emails", "- reports", "pipelines:", "driver: amqp", "${JOBS_URL}", "${QUEUE_NAME:-mail}", "concurrency: 2"} {
+	for _, expected := range []string{"jobs:", "consume:", "- emails", "- reports", "pool:", "num_workers: 4", "pipelines:", "driver: amqp", "${JOBS_URL}", "${QUEUE_NAME:-mail}", "concurrency: 2"} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("rendered jobs config missing %q:\n%s", expected, contents)
 		}

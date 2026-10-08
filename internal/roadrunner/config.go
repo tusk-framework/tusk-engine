@@ -64,7 +64,12 @@ type metricsConfig struct {
 
 type jobsConfig struct {
 	Consume   []string                     `yaml:"consume"`
+	Pool      jobsPoolConfig               `yaml:"pool"`
 	Pipelines map[string]jobPipelineConfig `yaml:"pipelines"`
+}
+
+type jobsPoolConfig struct {
+	NumWorkers int `yaml:"num_workers"`
 }
 
 type jobPipelineConfig struct {
@@ -138,7 +143,11 @@ func Project(cfg *config.Config) ([]byte, error) {
 		for name, pipeline := range cfg.Jobs.Pipelines {
 			pipelines[name] = jobPipelineConfig{Driver: pipeline.Driver, Config: pipeline.Config}
 		}
-		projected.Jobs = &jobsConfig{Consume: append([]string(nil), cfg.Jobs.Consume...), Pipelines: pipelines}
+		projected.Jobs = &jobsConfig{
+			Consume:   append([]string(nil), cfg.Jobs.Consume...),
+			Pool:      jobsPoolConfig{NumWorkers: cfg.WorkerCount},
+			Pipelines: pipelines,
+		}
 	}
 
 	return yaml.Marshal(projected)
