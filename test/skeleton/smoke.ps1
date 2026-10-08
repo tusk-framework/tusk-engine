@@ -357,7 +357,7 @@ final class WelcomeJob implements JobHandlerInterface
     $config['jobs'] = @{
         consume = @('default')
         pipelines = @{
-            default = @{ driver = 'memory'; config = @{} }
+            default = @{ driver = 'memory'; config = @{ prefetch = 10 } }
         }
     }
     [System.IO.File]::WriteAllText($configFile, ($config | ConvertTo-Json -Depth 20), [System.Text.UTF8Encoding]::new($false))
