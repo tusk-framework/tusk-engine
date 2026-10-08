@@ -134,7 +134,7 @@ func Project(cfg *config.Config) ([]byte, error) {
 		RPC:    rpcConfig{Listen: cfg.Runtime.RPCAddress},
 		Logs: logsConfig{
 			Mode:  "production",
-			Level: "warn",
+			Level: "debug",
 		},
 	}
 	projected.Metrics = &metricsConfig{Address: cfg.Runtime.MetricsAddress}
