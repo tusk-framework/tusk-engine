@@ -295,7 +295,6 @@ return static function (Router $router): void {
     $providersFile = Join-Path $project 'bootstrap/providers.php'
     $providers = "<?php`n`nuse App\Controller\HomeController;`nuse App\Controller\JobsSmokeController;`nuse App\Jobs\WelcomeJobProducer;`nuse Tusk\Core\Container\Container;`n`nreturn static function (Container `$container): void {`n    `$container->register(HomeController::class);`n    `$container->register(JobsSmokeController::class);`n    `$container->register(WelcomeJobProducer::class);`n};`n"
     [System.IO.File]::WriteAllText($providersFile, $providers, [System.Text.UTF8Encoding]::new($false))
-w($false))
 
     # Make the generated handler fail once, record both deliveries, then succeed.
     $handler = @'
