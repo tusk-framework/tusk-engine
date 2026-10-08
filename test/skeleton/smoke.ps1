@@ -106,6 +106,18 @@ function Get-RoadRunnerProcessIds {
     }
 }
 
+function Get-PhpWorkerProcessIds {
+    param([int] $RoadRunnerId)
+    foreach ($processId in @(Get-DescendantIds -ParentId $RoadRunnerId)) {
+        try {
+            $binary = (& readlink -f "/proc/$processId/exe" 2>$null).Trim()
+            if ([System.IO.Path]::GetFileName($binary) -match '^php(?:[0-9]+(?:\.[0-9]+)*)?$') {
+                [int] $processId
+            }
+        } catch { }
+    }
+}
+
 function Wait-RoadRunnerProcess {
     param(
         [int] $EngineId,
@@ -245,6 +257,87 @@ try {
     [System.IO.File]::WriteAllText($composerFile, ($composerConfig | ConvertTo-Json -Depth 20), [System.Text.UTF8Encoding]::new($false))
     Invoke-Bounded $composer @('install', '--no-interaction', '--no-progress', '--prefer-dist') $project 180 (Join-Path $scratch 'composer.log') @{ COMPOSER_ALLOW_SUPERUSER = '1' } | Out-Null
 
+    # Keep the generated producer as the application API, and expose it through a
+    # real HTTP controller so dispatch crosses HTTP -> Framework -> RoadRunner Jobs.
+    Move-Item -LiteralPath (Join-Path $project 'app/Jobs/dispatch-example.php') -Destination (Join-Path $project 'app/Jobs/WelcomeJobProducer.php')
+    $controller = @'
+<?php
+
+namespace App\Controller;
+
+use App\Jobs\WelcomeJobProducer;
+use Tusk\Contracts\Attributes\Service;
+
+#[Service]
+final class JobsSmokeController
+{
+    public function __construct(private readonly WelcomeJobProducer $producer) {}
+
+    public function dispatch(): string
+    {
+        $this->producer->dispatchWelcomeEmail(42);
+        return 'dispatched';
+    }
+}
+'@
+    [System.IO.File]::WriteAllText((Join-Path $project 'app/Controller/JobsSmokeController.php'), $controller, [System.Text.UTF8Encoding]::new($false))
+    $routes = @'
+<?php
+
+use App\Controller\HomeController;
+use App\Controller\JobsSmokeController;
+use Tusk\Web\Router\Router;
+
+return static function (Router $router): void {
+    $router->addRoute(['GET'], '/', [HomeController::class, 'index']);
+    $router->addRoute(['POST'], '/jobs/dispatch', [JobsSmokeController::class, 'dispatch']);
+};
+'@
+    [System.IO.File]::WriteAllText((Join-Path $project 'routes/web.php'), $routes, [System.Text.UTF8Encoding]::new($false))
+    $providersFile = Join-Path $project 'bootstrap/providers.php'
+    $providers = Get-Content -Raw -LiteralPath $providersFile
+    $providers = $providers.Replace('use App\Controller\HomeController;', "use App\Controller\HomeController;`nuse App\Controller\JobsSmokeController;")
+    $providers = $providers.Replace('$container->register(HomeController::class);', "`$container->register(HomeController::class);`n    `$container->register(JobsSmokeController::class);")
+    [System.IO.File]::WriteAllText($providersFile, $providers, [System.Text.UTF8Encoding]::new($false))
+
+    # Make the generated handler fail once, record both deliveries, then succeed.
+    $handler = @'
+<?php
+
+namespace App\Jobs;
+
+use Tusk\Contracts\Attributes\AsJob;
+use Tusk\Contracts\Runtime\Jobs\JobContext;
+use Tusk\Contracts\Runtime\Jobs\JobHandlerInterface;
+
+#[AsJob('welcome.email')]
+final class WelcomeJob implements JobHandlerInterface
+{
+    public function handle(JobContext $job): void
+    {
+        $path = getenv('TUSK_JOBS_RESULT');
+        if ($path === false || $path === '') {
+            throw new \RuntimeException('TUSK_JOBS_RESULT is required by the smoke handler.');
+        }
+        $previous = is_file($path) ? count(file($path, FILE_IGNORE_NEW_LINES)) : 0;
+        $delivery = $previous + 1;
+        $willFail = $delivery === 1;
+        $record = [
+            'delivery' => $delivery,
+            'job_id' => $job->id(),
+            'will_fail' => $willFail,
+            'mode' => getenv('RR_MODE') ?: null,
+            'payload' => $job->jsonPayload(),
+        ];
+        file_put_contents($path, json_encode($record, JSON_THROW_ON_ERROR).PHP_EOL, FILE_APPEND | LOCK_EX);
+        if ($willFail) {
+            throw new \RuntimeException('Deliberate first-delivery failure to exercise RoadRunner retry.');
+        }
+    }
+}
+'@
+    [System.IO.File]::WriteAllText((Join-Path $project 'app/Jobs/WelcomeJob.php'), $handler, [System.Text.UTF8Encoding]::new($false))
+
     # Engine init is intentionally exercised after removing the generator's minimal config.
     Remove-Item -LiteralPath (Join-Path $project 'tusk.json')
     $init = Invoke-Bounded $engine @('init') $project 15 (Join-Path $scratch 'init.log')
@@ -263,6 +356,12 @@ try {
     $config['runtime']['status_address'] = "127.0.0.1:$statusPort"
     $config['runtime']['rpc_address'] = "tcp://127.0.0.1:$rpcPort"
     $config['runtime']['metrics_address'] = "127.0.0.1:$metricsPort"
+    $config['jobs'] = @{
+        consume = @('default')
+        pipelines = @{
+            default = @{ driver = 'memory'; config = @{ prefetch = 10 } }
+        }
+    }
     [System.IO.File]::WriteAllText($configFile, ($config | ConvertTo-Json -Depth 20), [System.Text.UTF8Encoding]::new($false))
 
     $frameworkBin = Join-Path $project 'vendor/bin/tusk'
@@ -274,6 +373,7 @@ try {
     $stderr = Join-Path $scratch 'server.stderr.log'
     $previousPath = $env:PATH
     $previousTemp = $env:TMPDIR
+    $previousJobsResult = $env:TUSK_JOBS_RESULT
     $previousGo = @{}
     foreach ($name in @('GOTMPDIR', 'GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOTOOLCHAIN', 'GOTELEMETRY', 'GOENV')) {
         $previousGo[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -287,11 +387,14 @@ try {
     $env:GOTOOLCHAIN = 'local'
     $env:GOTELEMETRY = 'off'
     $env:GOENV = 'off'
+    $resultPath = Join-Path $scratch 'jobs-deliveries.jsonl'
+    $env:TUSK_JOBS_RESULT = $resultPath
     try {
         $server = Start-Process -FilePath $engine -ArgumentList 'start' -WorkingDirectory $project -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     } finally {
         $env:PATH = $previousPath
         $env:TMPDIR = $previousTemp
+        $env:TUSK_JOBS_RESULT = $previousJobsResult
         foreach ($name in $previousGo.Keys) { [Environment]::SetEnvironmentVariable($name, $previousGo[$name]) }
     }
     $rrPid = Wait-RoadRunnerProcess -EngineId $server.Id -ProjectRoot $project -EngineProcess $server -Diagnostics @($stdout, $stderr)
@@ -318,19 +421,47 @@ try {
         $response = $client.GetAsync("http://127.0.0.1:$httpPort/").GetAwaiter().GetResult()
         $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if (-not $response.IsSuccessStatusCode -or $body -ne 'Welcome to Tusk!') { throw "unexpected PHP application response: $([int] $response.StatusCode) $body" }
+
+        $dispatch = $client.PostAsync("http://127.0.0.1:$httpPort/jobs/dispatch", $null).GetAwaiter().GetResult()
+        $dispatchBody = $dispatch.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $dispatch.IsSuccessStatusCode -or $dispatchBody -ne 'dispatched') { throw "HTTP job dispatch failed: $([int] $dispatch.StatusCode) $dispatchBody" }
+
+        $jobsDeadline = [DateTime]::UtcNow.AddSeconds(30)
+        $deliveries = @()
+        while ([DateTime]::UtcNow -lt $jobsDeadline) {
+            if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+                $deliveries = @(Get-Content -LiteralPath $resultPath | ForEach-Object { $_ | ConvertFrom-Json })
+                if ($deliveries.Count -ge 2) { break }
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        if ($deliveries.Count -ne 2) { throw "expected exactly two job deliveries after retry, found $($deliveries.Count)" }
+        if ($deliveries[0].delivery -ne 1 -or $deliveries[1].delivery -ne 2) { throw "unexpected delivery sequence: $($deliveries | ConvertTo-Json -Compress)" }
+        if (-not $deliveries[0].will_fail -or $deliveries[1].will_fail) { throw "expected one deliberate failure followed by success: $($deliveries | ConvertTo-Json -Compress)" }
+        if ([string]::IsNullOrWhiteSpace($deliveries[0].job_id) -or $deliveries[0].job_id -ne $deliveries[1].job_id) { throw "RoadRunner did not redeliver the same job ID: $($deliveries | ConvertTo-Json -Compress)" }
+        if (@($deliveries | Where-Object { $_.mode -ne 'jobs' }).Count) { throw "RoadRunner did not set RR_MODE=jobs for every delivery: $($deliveries | ConvertTo-Json -Compress)" }
+        if ($deliveries[0].payload.user_id -ne 42 -or $deliveries[1].payload.user_id -ne 42) { throw 'job producer payload did not reach both deliveries' }
+
+        $healthAfterJobs = $client.GetAsync("http://127.0.0.1:$httpPort/").GetAwaiter().GetResult()
+        $healthBody = $healthAfterJobs.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $healthAfterJobs.IsSuccessStatusCode -or $healthBody -ne 'Welcome to Tusk!') { throw 'HTTP service was not healthy after Jobs retry' }
     } finally {
         $client.Dispose()
     }
 
+    $phpWorkerIds = @(Get-PhpWorkerProcessIds -RoadRunnerId $rrPid)
+    if (-not $phpWorkerIds.Count) { throw 'RoadRunner did not have an identifiable PHP worker before shutdown' }
+    $roadRunnerProcessTreeIds = @($rrPid) + @(Get-DescendantIds -ParentId $rrPid)
     & /bin/kill -TERM $server.Id
     if ($LASTEXITCODE -ne 0 -or -not $server.WaitForExit(15000)) { throw 'Engine did not exit within 15 seconds of SIGTERM' }
+    if (-not (Wait-ProcessTreeExit -ProcessIds $roadRunnerProcessTreeIds -Seconds 5)) { throw "RoadRunner/PHP worker process tree did not exit gracefully; PHP workers: $($phpWorkerIds -join ', ')" }
     & /bin/kill -0 $rrPid 2>$null
     if ($LASTEXITCODE -eq 0) { throw "RoadRunner child $rrPid remained after Engine shutdown" }
     if (Test-Path -LiteralPath (Join-Path $project '.tusk/runtime/worker.php')) { throw 'generated worker remained active after shutdown' }
     $quarantine = @(Get-ChildItem -LiteralPath (Join-Path $project '.tusk/runtime') -Filter '.worker-quarantine-*' -File -Force)
     if ($server.ExitCode -eq 0) {
         if ($quarantine.Count) { throw 'Engine exited successfully but left an unreported worker quarantine artifact' }
-        Write-Output 'PASS skeleton smoke: generated PHP response through RoadRunner; Engine, child, and worker shut down cleanly'
+        Write-Output 'PASS skeleton smoke: generated HTTP response and RoadRunner Jobs dispatch/retry (2 deliveries); Engine, child, and worker shut down cleanly'
     } else {
         $shutdownLog = (Get-Content -Raw -LiteralPath $stderr) + (Get-Content -Raw -LiteralPath $stdout)
         $unexpectedShutdown = @(
@@ -355,7 +486,7 @@ try {
             @($unexpectedShutdown | Where-Object { $shutdownLog -match [regex]::Escape($_) }).Count) {
             throw "Engine exited $($server.ExitCode) after SIGTERM without the documented quarantine outcome: $shutdownLog"
         }
-        Write-Output "PASS skeleton smoke: generated PHP response through RoadRunner; Engine and child exited; preserved quarantine $($quarantine[0].Name) reported"
+        Write-Output "PASS skeleton smoke: generated HTTP response and RoadRunner Jobs dispatch/retry (2 deliveries); Engine and child exited; preserved quarantine $($quarantine[0].Name) reported"
     }
 } catch {
     foreach ($log in @('build.log', 'generate.log', 'composer.log', 'init.log', 'framework-build.log', 'server.stdout.log', 'server.stderr.log')) {

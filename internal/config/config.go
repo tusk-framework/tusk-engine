@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ type Config struct {
 	Address    string                              `json:"address"`
 	Control    ControlConfig                       `json:"control"`
 	Runtime    RuntimeConfig                       `json:"runtime"`
+	Jobs       JobsConfig                          `json:"jobs,omitempty"`
 	Components map[string]components.Configuration `json:"components,omitempty"`
 
 	// RoadRunner and project configuration
@@ -71,6 +73,139 @@ type RuntimeConfig struct {
 	MetricsAddress string        `json:"metrics_address"`
 	StartupTimeout time.Duration `json:"startup_timeout"`
 	ProbeInterval  time.Duration `json:"probe_interval"`
+}
+
+// JobsConfig configures RoadRunner job consumption and named pipelines.
+type JobsConfig struct {
+	Consume   []string                     `json:"consume,omitempty"`
+	Pipelines map[string]JobPipelineConfig `json:"pipelines,omitempty"`
+}
+
+// JobPipelineConfig describes a RoadRunner Jobs driver and its opaque settings.
+type JobPipelineConfig struct {
+	Driver string         `json:"driver"`
+	Config map[string]any `json:"config,omitempty"`
+}
+
+// Validate checks pipeline names, consumption references, drivers, and safe
+// JSON configuration values without including configured values in errors.
+func (c JobsConfig) Validate() error {
+	seen := make(map[string]struct{}, len(c.Consume))
+	for _, name := range c.Consume {
+		if !validJobIdentifier(name) {
+			return fmt.Errorf("jobs.consume contains an invalid pipeline identifier")
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("jobs.consume contains a duplicate pipeline")
+		}
+		seen[name] = struct{}{}
+		if _, exists := c.Pipelines[name]; !exists {
+			return fmt.Errorf("jobs.consume references a missing consumed pipeline")
+		}
+	}
+	names := make([]string, 0, len(c.Pipelines))
+	for name := range c.Pipelines {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		pipeline := c.Pipelines[name]
+		if !validJobIdentifier(name) {
+			return fmt.Errorf("jobs.pipelines contains an invalid pipeline identifier")
+		}
+		if strings.TrimSpace(pipeline.Driver) == "" {
+			return fmt.Errorf("jobs pipeline driver is required")
+		}
+		if err := validateJobValue(pipeline.Config); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validJobIdentifier(value string) bool {
+	if value == "" || !isASCIIAlpha(value[0]) && value[0] != '_' {
+		return false
+	}
+	for index := 1; index < len(value); index++ {
+		char := value[index]
+		if !isASCIIAlpha(char) && (char < '0' || char > '9') && char != '_' && char != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIAlpha(char byte) bool {
+	return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
+}
+
+func validateJobValue(value any) error {
+	switch typed := value.(type) {
+	case nil, bool, float64, float32, int, int32, int64, uint, uint32, uint64:
+		return nil
+	case string:
+		return validateJobPlaceholders(typed)
+	case []any:
+		for _, item := range typed {
+			if err := validateJobValue(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]any:
+		for _, item := range typed {
+			if err := validateJobValue(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("jobs pipeline config must contain only JSON-compatible values")
+	}
+}
+
+func validateJobPlaceholders(value string) error {
+	for index := 0; index < len(value); {
+		if value[index] != '$' {
+			index++
+			continue
+		}
+		if index+1 >= len(value) || value[index+1] != '{' {
+			if index+1 < len(value) && (isASCIIAlpha(value[index+1]) || value[index+1] == '_') {
+				return fmt.Errorf("jobs pipeline config contains an unsupported environment placeholder")
+			}
+			index++
+			continue
+		}
+		end := strings.IndexByte(value[index+2:], '}')
+		if end < 0 {
+			return fmt.Errorf("jobs pipeline config contains a malformed environment placeholder")
+		}
+		placeholder := value[index+2 : index+2+end]
+		name, fallback, hasFallback := strings.Cut(placeholder, ":-")
+		if !validEnvironmentName(name) || strings.Contains(placeholder, "${") || strings.Contains(placeholder, "}") || strings.Contains(name, ":") {
+			return fmt.Errorf("jobs pipeline config contains an unsafe environment placeholder")
+		}
+		if hasFallback && (strings.Contains(fallback, "$") || strings.Contains(fallback, "}")) {
+			return fmt.Errorf("jobs pipeline config contains an unsafe environment placeholder")
+		}
+		index += end + 3
+	}
+	return nil
+}
+
+func validEnvironmentName(value string) bool {
+	if value == "" || !isASCIIAlpha(value[0]) && value[0] != '_' {
+		return false
+	}
+	for index := 1; index < len(value); index++ {
+		char := value[index]
+		if !isASCIIAlpha(char) && (char < '0' || char > '9') && char != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 const (
@@ -346,6 +481,27 @@ func mergeConfig(dst, overlay *Config) {
 	if overlay.Components != nil {
 		dst.Components = cloneComponentConfigurations(overlay.Components)
 	}
+	if len(overlay.Jobs.Consume) > 0 || overlay.Jobs.Pipelines != nil {
+		dst.Jobs = cloneJobsConfig(overlay.Jobs)
+	}
+}
+
+func cloneJobsConfig(source JobsConfig) JobsConfig {
+	clone := JobsConfig{Consume: append([]string(nil), source.Consume...)}
+	if source.Pipelines != nil {
+		clone.Pipelines = make(map[string]JobPipelineConfig, len(source.Pipelines))
+		for name, pipeline := range source.Pipelines {
+			copyOf := JobPipelineConfig{Driver: pipeline.Driver}
+			if pipeline.Config != nil {
+				copyOf.Config = make(map[string]any, len(pipeline.Config))
+				for key, value := range pipeline.Config {
+					copyOf.Config[key] = cloneComponentValue(value)
+				}
+			}
+			clone.Pipelines[name] = copyOf
+		}
+	}
+	return clone
 }
 
 func cloneComponentConfigurations(source map[string]components.Configuration) map[string]components.Configuration {
@@ -395,6 +551,9 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("max_body_bytes must be positive")
 	}
 	if err := cfg.Runtime.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Jobs.Validate(); err != nil {
 		return err
 	}
 	return nil

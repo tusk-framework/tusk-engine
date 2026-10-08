@@ -17,6 +17,7 @@ type fileConfig struct {
 	RPC     rpcConfig      `yaml:"rpc"`
 	Logs    logsConfig     `yaml:"logs"`
 	Metrics *metricsConfig `yaml:"metrics,omitempty"`
+	Jobs    *jobsConfig    `yaml:"jobs,omitempty"`
 }
 
 type serverConfig struct {
@@ -59,6 +60,21 @@ type rpcConfig struct {
 
 type metricsConfig struct {
 	Address string `yaml:"address"`
+}
+
+type jobsConfig struct {
+	Consume   []string                     `yaml:"consume"`
+	Pool      jobsPoolConfig               `yaml:"pool"`
+	Pipelines map[string]jobPipelineConfig `yaml:"pipelines"`
+}
+
+type jobsPoolConfig struct {
+	NumWorkers int `yaml:"num_workers"`
+}
+
+type jobPipelineConfig struct {
+	Driver string         `yaml:"driver"`
+	Config map[string]any `yaml:"config,omitempty"`
 }
 
 const generatedWorkerPath = ".tusk/runtime/worker.php"
@@ -122,6 +138,17 @@ func Project(cfg *config.Config) ([]byte, error) {
 		},
 	}
 	projected.Metrics = &metricsConfig{Address: cfg.Runtime.MetricsAddress}
+	if len(cfg.Jobs.Consume) > 0 || len(cfg.Jobs.Pipelines) > 0 {
+		pipelines := make(map[string]jobPipelineConfig, len(cfg.Jobs.Pipelines))
+		for name, pipeline := range cfg.Jobs.Pipelines {
+			pipelines[name] = jobPipelineConfig{Driver: pipeline.Driver, Config: pipeline.Config}
+		}
+		projected.Jobs = &jobsConfig{
+			Consume:   append([]string(nil), cfg.Jobs.Consume...),
+			Pool:      jobsPoolConfig{NumWorkers: cfg.WorkerCount},
+			Pipelines: pipelines,
+		}
+	}
 
 	return yaml.Marshal(projected)
 }

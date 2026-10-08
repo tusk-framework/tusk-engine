@@ -366,6 +366,197 @@ Tusk reads the relevant `composer.json` fields, including:
 
 Dependency resolution and lockfile generation remain Composer responsibilities.
 
+### RoadRunner Jobs pipelines
+
+The Engine projects RoadRunner Jobs pipelines from `tusk.json`. Declare named
+pipelines under `jobs.pipelines` and list the ones RoadRunner should consume
+under `jobs.consume`:
+
+```json
+{
+  "jobs": {
+    "consume": ["emails"],
+    "pipelines": {
+      "emails": {
+        "driver": "amqp",
+        "config": {
+          "url": "${TUSK_JOBS_AMQP_URL}",
+          "queue": "${TUSK_JOBS_QUEUE:-emails}"
+        }
+      }
+    }
+  }
+}
+```
+
+Pipeline names must be identifiers and every consumed pipeline must exist.
+Environment references accept `${NAME}` and `${NAME:-DEFAULT}` syntax and are
+preserved in generated RoadRunner configuration; RoadRunner expands them from
+the Engine process environment. The Engine does not expand or log their values.
+Keep credentials in environment variables, not `tusk.json`.
+
+RoadRunner uses the same `server.command` for its HTTP and Jobs worker pools,
+sets the Jobs pool size from the Engine's `worker_count`, and sets `RR_MODE` for
+each worker. The Tusk Framework selects its HTTP or Jobs loop from that value,
+so an HTTP producer and Jobs consumer can run together under the Engine-managed
+RoadRunner process. When `jobs` is absent, the
+generated configuration remains HTTP-only. The Engine skeleton smoke exercises
+HTTP dispatch, memory-pipeline consumption, a retried delivery, and graceful
+shutdown across both worker modes.
+
+### Component model
+
+The Engine validates and activates configured components before starting
+RoadRunner or the control server. Add component settings under
+`"components"` in `tusk.json`; invalid names, fields, types, provider
+configuration, or startup health checks fail before traffic is served. The
+default registry provides the transport-free
+`in-process-service-invocation` contract and the bounded
+`default-resilience` provider. See [docs/components.md](docs/components.md)
+for configuration, idempotency, retry, deadline, circuit-breaker, metadata,
+and provider-substitution guidance.
+
+### Toolchain diagnosis
+
+The Engine can inspect the exact PHP, Composer, and RoadRunner executables
+available to the project without changing the machine:
+
+```bash
+tusk doctor
+tusk doctor --json
+tusk toolchain list
+tusk toolchain pin php@8.3
+tusk setup --toolchain --offline
+```
+
+When `.tusk/toolchain.json` declares a relative executable path, the project
+binary takes precedence over `PATH`. `tusk setup --toolchain` is the only
+command that provisions tools: it loads the signed catalog at
+`.tusk/toolchain.catalog.json`, installs only pinned tools without explicit
+paths, and records managed paths only after verified installation. Add
+`--offline` to require a digest-checked cache hit; missing, unsigned, or
+expired catalogs fail before download. No executable is silently replaced and
+the global `PATH` is never changed.
+
+Release operators must follow the [official catalog release
+runbook](release/README.md) for payload review, environment-only signing,
+provenance, key rotation, and revocation. The checked-in payload is signing
+input only; it is not a trusted runtime catalog.
+
+**Use composer.json for Composer-managed project data** - tusk reads Composer
+dependencies, metadata, and scripts from it. Application settings remain in
+`config/*.php`, while platform settings remain in `tusk.json`:
+```json
+{
+    "name": "my/project",
+    "require": {
+        "php": "^8.0"
+    },
+    "scripts": {
+        "dev": "tusk start",
+        "test": "phpunit"
+    }
+}
+```
+
+> [!NOTE]
+> `tusk.json` controls Engine/platform settings; `composer.json` controls dependencies and lockfiles. Scripts from both are merged, with `tusk.json` winning name conflicts. Application configuration belongs under `config/*.php`; `config.php` is not a special runtime filename.
+
+### Control API
+
+The control API is disabled by default and does not change the public traffic server. Enable it explicitly for local health checks and observability:
+
+```json
+{
+    "control": {
+        "enabled": true,
+        "address": "127.0.0.1",
+        "port": 9091,
+        "metrics_path": "/v1/metrics"
+    },
+    "runtime": {
+        "metrics_address": "127.0.0.1:2112"
+    }
+}
+```
+
+When enabled, the engine exposes:
+
+- `GET /v1/healthz` — process health; returns `200` during startup and graceful shutdown.
+- `GET /v1/readyz` — RoadRunner readiness; returns `200` only after its status plugin reports an HTTP worker ready.
+- `GET /v1/metadata` — safe engine and runtime metadata.
+- `GET /v1/metrics` — authenticated composition of Engine and RoadRunner Prometheus metrics.
+
+The default loopback binding does not require a token. If `address` is non-loopback, configure a non-empty `token`; every control endpoint then requires `Authorization: Bearer <token>`. Do not expose the control API publicly without a network policy and secret management appropriate for your deployment.
+
+RoadRunner's Prometheus listener is internal and loopback-only at
+`http://127.0.0.1:2112/metrics` by default. Tusk renders RoadRunner's
+`http_metrics` middleware, which supplies bounded method/status/duration request
+metrics plus worker state and queue-depth metrics, then composes that scrape
+behind the authenticated Control API. The runtime metrics listener rejects
+non-loopback addresses; use the Control API or an authenticated monitoring
+gateway/local scrape agent when metrics must be collected remotely. The
+Control API and its metrics route are disabled by default.
+
+RoadRunner remains the source of truth for worker lifecycle, queue, and request
+metrics. The Engine exposes its RoadRunner lifecycle and scrape-availability
+metrics through the control registry.
+
+### Engine components
+
+The Engine activates its versioned component registry before the control plane
+or RoadRunner starts. Configure validated, transport-free providers under the
+`components` object in `tusk.json`; see [Engine components](docs/components.md)
+for the default service-invocation and resilience providers, bounded retry and
+idempotency rules, provider substitution, and safe metadata behavior.
+
+### 3. Manage Dependencies with Composer
+```bash
+# Install dependencies
+tusk install
+
+# Add a package
+tusk add symfony/console
+
+# Remove a package
+tusk remove symfony/console
+
+# Update dependencies
+tusk update
+```
+
+### 4. Run Scripts
+```bash
+# Run any script defined in tusk.json or composer.json
+
+# Explicit way (recommended for clarity)
+tusk run dev
+tusk run test
+
+# Shorthand (backward compatible)
+tusk dev
+tusk test
+
+# Scripts from both config files work seamlessly
+```
+
+> [!TIP]
+> Use `tusk run <script>` for explicit script execution, or just `tusk <script>` as shorthand.
+> Both work the same way, but `tusk run` makes it clear you're running a script.
+
+### 5. Start RoadRunner
+```bash
+# Run from the project root after installing dependencies
+tusk start
+```
+
+> [!TIP]
+> `tusk start` requires `bootstrap/app.php`. The Engine creates `.tusk/runtime/worker.php` and a private RoadRunner configuration, then starts `rr serve` with `php .tusk/runtime/worker.php`. It waits for `/ready?plugin=http` and shuts RoadRunner down gracefully. Status and RPC sockets are loopback-only by default. Missing RoadRunner or failed readiness is an error.
+
+Projects must provide the modern application contract: `bootstrap/app.php`,
+application-owned configuration and routes, and Composer dependencies. Review
+the bootstrap composition before running `tusk start`.
+
 ## Runtime boundary
 RoadRunner owns HTTP, Goridge IPC, worker pooling, recycling, and process-level shutdown. The Engine supervises it and generates the worker inside the project's `.tusk` directory. The PHP application is created once per worker; request-scoped services are reset after each request.
 
