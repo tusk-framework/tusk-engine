@@ -293,20 +293,7 @@ return static function (Router $router): void {
 '@
     [System.IO.File]::WriteAllText((Join-Path $project 'routes/web.php'), $routes, [System.Text.UTF8Encoding]::new($false))
     $providersFile = Join-Path $project 'bootstrap/providers.php'
-    $providers = @'
-<?php
-
-use App\Controller\HomeController;
-use App\Controller\JobsSmokeController;
-use App\Jobs\WelcomeJobProducer;
-use Tusk\Core\Container\Container;
-
-return static function (Container $container): void {
-    $container->register(HomeController::class);
-    $container->register(JobsSmokeController::class);
-    $container->register(WelcomeJobProducer::class);
-};
-'@
+    $providers = "<?php`n`nuse App\Controller\HomeController;`nuse App\Controller\JobsSmokeController;`nuse App\Jobs\WelcomeJobProducer;`nuse Tusk\Core\Container\Container;`n`nreturn static function (Container `$container): void {`n    `$container->register(HomeController::class);`n    `$container->register(JobsSmokeController::class);`n    `$container->register(WelcomeJobProducer::class);`n};`n"
     [System.IO.File]::WriteAllText($providersFile, $providers, [System.Text.UTF8Encoding]::new($false))
 w($false))
 
