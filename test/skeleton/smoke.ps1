@@ -266,7 +266,9 @@ try {
 namespace App\Controller;
 
 use App\Jobs\WelcomeJobProducer;
+use Tusk\Contracts\Attributes\Service;
 
+#[Service]
 final class JobsSmokeController
 {
     public function __construct(private readonly WelcomeJobProducer $producer) {}
@@ -293,7 +295,9 @@ return static function (Router $router): void {
 '@
     [System.IO.File]::WriteAllText((Join-Path $project 'routes/web.php'), $routes, [System.Text.UTF8Encoding]::new($false))
     $providersFile = Join-Path $project 'bootstrap/providers.php'
-    $providers = "<?php`n`nuse App\Controller\HomeController;`nuse App\Controller\JobsSmokeController;`nuse App\Jobs\WelcomeJobProducer;`nuse Tusk\Core\Container\Container;`n`nreturn static function (Container `$container): void {`n    `$container->register(HomeController::class);`n    `$container->register(JobsSmokeController::class);`n    `$container->register(WelcomeJobProducer::class);`n};`n"
+    $providers = Get-Content -Raw -LiteralPath $providersFile
+    $providers = $providers.Replace('use App\Controller\HomeController;', "use App\Controller\HomeController;`nuse App\Controller\JobsSmokeController;")
+    $providers = $providers.Replace('$container->register(HomeController::class);', "`$container->register(HomeController::class);`n    `$container->register(JobsSmokeController::class);")
     [System.IO.File]::WriteAllText($providersFile, $providers, [System.Text.UTF8Encoding]::new($false))
 
     # Make the generated handler fail once, record both deliveries, then succeed.
