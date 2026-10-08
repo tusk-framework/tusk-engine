@@ -296,6 +296,8 @@ return static function (Router $router): void {
     $providers = Get-Content -Raw -LiteralPath $providersFile
     $providers = $providers.Replace('use App\Controller\HomeController;', "use App\Controller\HomeController;`nuse App\Controller\JobsSmokeController;")
     $providers = $providers.Replace('$container->register(HomeController::class);', "`$container->register(HomeController::class);`n    `$container->register(JobsSmokeController::class);")
+    $providers = $providers.Replace('use App\Controller\HomeController;', "use App\Controller\HomeController;`nuse App\Controller\JobsSmokeController;")
+    $providers = $providers.Replace('$container->register(HomeController::class);', "`$container->register(HomeController::class);`n    `$container->register(JobsSmokeController::class);")
     [System.IO.File]::WriteAllText($providersFile, $providers, [System.Text.UTF8Encoding]::new($false))
 
     # Make the generated handler fail once, record both deliveries, then succeed.
