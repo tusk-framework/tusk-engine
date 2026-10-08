@@ -133,6 +133,43 @@ Requests above the configured body limit are rejected by RoadRunner with HTTP
 from `tusk.json` override scripts with the same name from `composer.json`,
 while non-conflicting scripts are merged.
 
+### RoadRunner Jobs pipelines
+
+The Engine projects RoadRunner Jobs pipelines from `tusk.json`. Declare named
+pipelines under `jobs.pipelines` and list the ones RoadRunner should consume
+under `jobs.consume`:
+
+```json
+{
+  "jobs": {
+    "consume": ["emails"],
+    "pipelines": {
+      "emails": {
+        "driver": "amqp",
+        "config": {
+          "url": "${TUSK_JOBS_AMQP_URL}",
+          "queue": "${TUSK_JOBS_QUEUE:-emails}"
+        }
+      }
+    }
+  }
+}
+```
+
+Pipeline names must be identifiers and every consumed pipeline must exist.
+Environment references accept `${NAME}` and `${NAME:-DEFAULT}` syntax and are
+preserved in generated RoadRunner configuration; RoadRunner expands them from
+the Engine process environment. The Engine does not expand or log their values.
+Keep credentials in environment variables, not `tusk.json`.
+
+RoadRunner uses the same `server.command` for its HTTP and Jobs worker pools,
+and sets `RR_MODE` for each worker. The Tusk Framework selects its HTTP or Jobs
+loop from that value, so an HTTP producer and Jobs consumer can run together
+under the Engine-managed RoadRunner process. When `jobs` is absent, the
+generated configuration remains HTTP-only. The Engine skeleton smoke exercises
+HTTP dispatch, memory-pipeline consumption, a retried delivery, and graceful
+shutdown across both worker modes.
+
 ### Component model
 
 The Engine validates and activates configured components before starting

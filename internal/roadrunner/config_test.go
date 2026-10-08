@@ -110,3 +110,42 @@ func TestProjectRejectsInvalidRuntimeInputs(t *testing.T) {
 		t.Fatal("Project() accepted an invalid port")
 	}
 }
+
+func TestProjectRendersJobsPipelinesDeterministically(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Jobs = config.JobsConfig{
+		Consume: []string{"emails", "reports"},
+		Pipelines: map[string]config.JobPipelineConfig{
+			"reports": {Driver: "memory", Config: map[string]any{"concurrency": 2}},
+			"emails":  {Driver: "amqp", Config: map[string]any{"url": "${JOBS_URL}", "fallback": "${QUEUE_NAME:-mail}"}},
+		},
+	}
+
+	first, err := Project(cfg)
+	if err != nil {
+		t.Fatalf("Project() error = %v", err)
+	}
+	second, err := Project(cfg)
+	if err != nil {
+		t.Fatalf("Project() second error = %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("jobs projection is not deterministic:\n%s\n---\n%s", first, second)
+	}
+	contents := string(first)
+	for _, expected := range []string{"jobs:", "consume:", "- emails", "- reports", "pipelines:", "driver: amqp", "${JOBS_URL}", "${QUEUE_NAME:-mail}", "concurrency: 2"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("rendered jobs config missing %q:\n%s", expected, contents)
+		}
+	}
+}
+
+func TestProjectOmitsJobsForHTTPOnlyConfig(t *testing.T) {
+	projected, err := Project(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("Project() error = %v", err)
+	}
+	if strings.Contains(string(projected), "\njobs:") {
+		t.Fatalf("HTTP-only config unexpectedly contains jobs section:\n%s", projected)
+	}
+}

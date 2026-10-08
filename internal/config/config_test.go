@@ -227,6 +227,111 @@ func TestLoadConfigRejectsNonObjectComponentConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadConfigLoadsAndValidatesJobs(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{"jobs":{"consume":["emails","reports"],"pipelines":{"emails":{"driver":"amqp","config":{"url":"${JOBS_URL}","fallback":"${QUEUE_NAME:-mail}","nested":{"enabled":true}}},"reports":{"driver":"memory","config":{"concurrency":4}}}}}`)
+
+	cfg, err := loadConfigFromDir(root)
+	if err != nil {
+		t.Fatalf("loadConfigFromDir() error = %v", err)
+	}
+	if !reflect.DeepEqual(cfg.Jobs.Consume, []string{"emails", "reports"}) {
+		t.Fatalf("Jobs.Consume = %#v", cfg.Jobs.Consume)
+	}
+	if cfg.Jobs.Pipelines["emails"].Config["url"] != "${JOBS_URL}" || cfg.Jobs.Pipelines["emails"].Config["fallback"] != "${QUEUE_NAME:-mail}" {
+		t.Fatalf("environment placeholders must remain unexpanded: %#v", cfg.Jobs.Pipelines["emails"].Config)
+	}
+}
+
+func TestLoadConfigRejectsInvalidJobs(t *testing.T) {
+	tests := []struct {
+		name, json, want string
+	}{
+		{name: "missing consumed pipeline", json: `{"jobs":{"consume":["emails"],"pipelines":{}}}`, want: "consumed pipeline"},
+		{name: "duplicate consumed pipeline", json: `{"jobs":{"consume":["emails","emails"],"pipelines":{"emails":{"driver":"amqp"}}}}`, want: "duplicate"},
+		{name: "invalid identifier", json: `{"jobs":{"consume":["bad/name"],"pipelines":{"bad/name":{"driver":"amqp"}}}}`, want: "identifier"},
+		{name: "empty driver", json: `{"jobs":{"pipelines":{"emails":{"driver":"  "}}}}`, want: "driver"},
+		{name: "unsupported config value", json: "", want: "JSON-compatible"},
+		{name: "malformed interpolation", json: `{"jobs":{"pipelines":{"emails":{"driver":"amqp","config":{"url":"${JOBS_URL"}}}}}`, want: "placeholder"},
+		{name: "unsafe interpolation", json: `{"jobs":{"pipelines":{"emails":{"driver":"amqp","config":{"url":"${BAD-NAME}"}}}}}`, want: "placeholder"},
+		{name: "unsupported interpolation", json: `{"jobs":{"pipelines":{"emails":{"driver":"amqp","config":{"url":"$JOBS_URL"}}}}}`, want: "placeholder"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.json != "" {
+				writeConfigFile(t, filepath.Join(root, "tusk.json"), tt.json)
+				_, err := loadConfigFromDir(root)
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("loadConfigFromDir() error = %v, want %q", err, tt.want)
+				}
+				return
+			}
+			cfg := DefaultConfig()
+			cfg.Jobs = JobsConfig{Pipelines: map[string]JobPipelineConfig{"emails": {Driver: "amqp", Config: map[string]any{"unsupported": make(chan int)}}}}
+			if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfigRedactsJobPlaceholderValuesFromErrors(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{"jobs":{"consume":["missing"],"pipelines":{"private":{"driver":"amqp","config":{"password":"sensitive-value"}}}}}`)
+	_, err := loadConfigFromDir(root)
+	if err == nil {
+		t.Fatal("loadConfigFromDir() accepted a missing consumed pipeline")
+	}
+	if strings.Contains(err.Error(), "sensitive-value") {
+		t.Fatalf("error leaked configured secret: %v", err)
+	}
+}
+
+func TestJobsConfigValidatePreservesSupportedPlaceholders(t *testing.T) {
+	cfg := JobsConfig{Pipelines: map[string]JobPipelineConfig{
+		"emails": {Driver: "amqp", Config: map[string]any{
+			"url":   "amqp://${JOBS_USER}:${JOBS_PASSWORD}@broker",
+			"queue": "${QUEUE_NAME:-mail}",
+		}},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestJobsConfigValidateAllowsLiteralDollarSigns(t *testing.T) {
+	cfg := JobsConfig{Pipelines: map[string]JobPipelineConfig{
+		"billing": {Driver: "memory", Config: map[string]any{"price": "$5.00", "expression": "cost $ + tax"}},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected literal dollar signs: %v", err)
+	}
+}
+
+func TestLoadConfigPreservesJobsWithoutConsumption(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{"jobs":{"pipelines":{"emails":{"driver":"amqp","config":{"queue":"emails"}}}}}`)
+	cfg, err := loadConfigFromDir(root)
+	if err != nil {
+		t.Fatalf("loadConfigFromDir() error = %v", err)
+	}
+	if len(cfg.Jobs.Consume) != 0 || cfg.Jobs.Pipelines["emails"].Driver != "amqp" {
+		t.Fatalf("Jobs = %#v, want configured pipeline without consumption", cfg.Jobs)
+	}
+}
+
+func TestJobsConfigValidateRedactsInvalidConfiguredValues(t *testing.T) {
+	const secret = "private-secret-value"
+	cfg := JobsConfig{Pipelines: map[string]JobPipelineConfig{
+		"emails": {Driver: "amqp", Config: map[string]any{"credential": secret, "endpoint": "${INVALID-NAME}"}},
+	}}
+	err := cfg.Validate()
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("Validate() error = %v, expected redacted validation error", err)
+	}
+}
+
 func TestLoadConfigLoadsAndCopiesComponentConfiguration(t *testing.T) {
 	root := t.TempDir()
 	writeConfigFile(t, filepath.Join(root, "tusk.json"), `{
