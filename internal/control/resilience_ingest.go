@@ -25,6 +25,9 @@ const maxResilienceBodyBytes = 64 * 1024
 
 type ResilienceIngestServer struct {
 	mu       sync.Mutex
+	stopOnce sync.Once
+	stopDone chan struct{}
+	stopErr  error
 	listener net.Listener
 	http     *http.Server
 	store    *ResilienceDiagnosticsStore
@@ -52,6 +55,7 @@ func NewResilienceIngestServer() (*ResilienceIngestServer, error) {
 		listener: listener, store: NewResilienceDiagnosticsStore(),
 		url: "http://" + listener.Addr().String(), token: hex.EncodeToString(secret),
 		ready: make(chan struct{}), done: make(chan struct{}),
+		stopDone: make(chan struct{}),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(resilienceIngestPath, s.handleSnapshot)
@@ -135,6 +139,31 @@ func (s *ResilienceIngestServer) WaitReady(ctx context.Context) error {
 }
 
 func (s *ResilienceIngestServer) Stop(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.stopOnce.Do(func() {
+		go func() {
+			s.stopErr = s.stop(ctx)
+			close(s.stopDone)
+		}()
+	})
+	select {
+	case <-s.stopDone:
+		return s.stopErr
+	case <-ctx.Done():
+		waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		select {
+		case <-s.stopDone:
+			return s.stopErr
+		case <-waitContext.Done():
+			return waitContext.Err()
+		}
+	}
+}
+
+func (s *ResilienceIngestServer) stop(ctx context.Context) error {
 	s.mu.Lock()
 	started := s.started
 	if !s.stopped {
@@ -147,14 +176,10 @@ func (s *ResilienceIngestServer) Stop(ctx context.Context) error {
 	s.mu.Unlock()
 	var err error
 	if started {
-		shutdownDone := make(chan error, 1)
-		go func() { shutdownDone <- s.http.Shutdown(ctx) }()
-		select {
-		case err = <-shutdownDone:
-			if err != nil {
-				_ = s.http.Close()
-			}
-		case <-ctx.Done():
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancelShutdown()
+		err = s.http.Shutdown(shutdownContext)
+		if err != nil {
 			_ = s.http.Close()
 			err = nil
 		}

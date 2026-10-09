@@ -288,6 +288,15 @@ func TestResilienceIngestConcurrentStopWaitsForShutdown(t *testing.T) {
 	}
 	started := make(chan error, 1)
 	go func() { started <- ingest.Start() }()
+	active := make(chan struct{}, 1)
+	ingest.http.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateActive {
+			select {
+			case active <- struct{}{}:
+			default:
+			}
+		}
+	}
 	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
 	defer cancelReady()
 	if err := ingest.WaitReady(readyContext); err != nil {
@@ -302,20 +311,23 @@ func TestResilienceIngestConcurrentStopWaitsForShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case <-active:
+	case <-time.After(time.Second):
+		t.Fatal("server did not accept incomplete request")
+	}
 
-	stopContext, cancelStop := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancelStop()
 	firstStop := make(chan error, 1)
 	secondStop := make(chan error, 1)
-	go func() { firstStop <- ingest.Stop(stopContext) }()
-	go func() { secondStop <- ingest.Stop(stopContext) }()
+	go func() { firstStop <- ingest.Stop(context.Background()) }()
+	go func() { secondStop <- ingest.Stop(context.Background()) }()
 	for name, result := range map[string]<-chan error{"first": firstStop, "second": secondStop} {
 		select {
 		case err := <-result:
 			if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("%s Stop() = %v", name, err)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(1500 * time.Millisecond):
 			t.Fatalf("%s Stop() did not observe completed shutdown", name)
 		}
 	}
@@ -327,6 +339,37 @@ func TestResilienceIngestConcurrentStopWaitsForShutdown(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("private listener remained active after concurrent Stop calls")
+	}
+}
+
+func TestResilienceIngestConcurrentStopIsIdempotentWithoutActiveRequests(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- ingest.Start() }()
+	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := ingest.WaitReady(readyContext); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan error, 2)
+	go func() { results <- ingest.Stop(context.Background()) }()
+	go func() { results <- ingest.Stop(context.Background()) }()
+	for range 2 {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("Stop() = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("concurrent Stop() calls did not share shutdown completion")
+		}
+	}
+	if err := <-started; err != nil {
+		t.Fatalf("Start() = %v", err)
 	}
 }
 
