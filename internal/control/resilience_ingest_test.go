@@ -1,0 +1,464 @@
+package control
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tusk-framework/tusk-engine/internal/metrics"
+)
+
+func TestResilienceIngestLoopbackAuthenticationAndRedaction(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := strings.TrimPrefix(ingest.URL(), "http://")
+	host, _, err := net.SplitHostPort(address)
+	if err != nil || host != "127.0.0.1" {
+		t.Fatalf("ingest address = %q, error = %v", address, err)
+	}
+	if ingest.Token() == "" {
+		t.Fatal("missing token")
+	}
+	done := make(chan error, 1)
+	go func() { done <- ingest.Start() }()
+	defer func() { _ = ingest.Stop(context.Background()); <-done }()
+	payload, _ := json.Marshal(report("opaque-worker", 1, "payments", "open"))
+	for _, tt := range []struct {
+		name, token string
+		status      int
+	}{
+		{"missing", "", http.StatusUnauthorized}, {"wrong", "wrong", http.StatusUnauthorized}, {"valid", ingest.Token(), http.StatusOK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request, _ := http.NewRequest(http.MethodPost, ingest.URL()+"/internal/v1/resilience/snapshot", bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			if tt.token != "" {
+				request.Header.Set("Authorization", "Bearer "+tt.token)
+			}
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			body, _ := io.ReadAll(response.Body)
+			if response.StatusCode != tt.status {
+				t.Fatalf("status = %d, want %d", response.StatusCode, tt.status)
+			}
+			if strings.Contains(string(body), "payments") || strings.Contains(string(body), "opaque-worker") || strings.Contains(string(body), ingest.Token()) || len(body) > 128 {
+				t.Fatalf("response disclosed report or secret: %q", body)
+			}
+		})
+	}
+	if ingest.Store().Snapshot(time.Now(), true).Circuits[0].Workers.Open != 1 {
+		t.Fatal("valid report not stored")
+	}
+}
+
+func TestResilienceIngestCountsRejectedReports(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ingest.Stop(context.Background())
+	count := func() float64 {
+		families, err := metrics.Registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range families {
+			if family.GetName() == "tusk_resilience_reports_rejected_total" {
+				return family.GetMetric()[0].GetCounter().GetValue()
+			}
+		}
+		return 0
+	}
+	before := count()
+	recorder := httptest.NewRecorder()
+	ingest.handleSnapshot(recorder, httptest.NewRequest(http.MethodPost, resilienceIngestPath, strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusUnauthorized || count() != before+1 {
+		t.Fatal("unauthorized report was not counted")
+	}
+}
+
+func TestResilienceIngestCannotRecordAfterStop(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, writer := io.Pipe()
+	request := httptest.NewRequest(http.MethodPost, resilienceIngestPath, reader)
+	request.Header.Set("Authorization", "Bearer "+ingest.Token())
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { ingest.handleSnapshot(recorder, request); close(done) }()
+	if _, err := writer.Write([]byte(`{"schema_version":"v1",`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte(`"worker_id":"worker","sequence":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	<-done
+	if ingest.Store().Snapshot(time.Now(), true).Status != "unavailable" {
+		t.Fatal("report stored after shutdown")
+	}
+}
+
+func TestResilienceIngestWaitReadyAndStopWaitsForServe(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- ingest.Start() }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ingest.WaitReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("Stop() returned before private server stopped")
+	}
+}
+
+func TestResilienceIngestWaitReadyReportsFailureAndStopBeforeStart(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	startDone := make(chan error, 1)
+	go func() { startDone <- ingest.Start() }()
+	if err := <-startDone; err == nil {
+		t.Fatal("Start() hid listener failure")
+	}
+	if err := ingest.WaitReady(context.Background()); err == nil {
+		t.Fatal("WaitReady() succeeded after listener failure")
+	}
+
+	stopped, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stopped.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := stopped.WaitReady(ctx); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitReady() after stop-before-start = %v, want immediate stopped error", err)
+	}
+}
+
+func TestResilienceIngestWaitReadyRejectsRecordedFailureBeforeDoneSignal(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ingest.Stop(context.Background()) })
+	close(ingest.ready)
+	ingest.mu.Lock()
+	ingest.stopped = true
+	ingest.startErr = errors.New("listener failed")
+	ingest.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ingest.WaitReady(ctx); err == nil || !strings.Contains(err.Error(), "listener failed") {
+		t.Fatalf("WaitReady() = %v, want recorded listener failure", err)
+	}
+}
+
+func TestResilienceIngestShutdownClosesIncompleteRequest(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := make(chan struct{}, 1)
+	ingest.http.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateActive {
+			select {
+			case active <- struct{}{}:
+			default:
+			}
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- ingest.Start() }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ingest.WaitReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.Dial("tcp", strings.TrimPrefix(ingest.URL(), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(connection, "POST %s HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{", resilienceIngestPath, ingest.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-active:
+	case <-time.After(time.Second):
+		t.Fatal("server did not accept incomplete request")
+	}
+	stopContext, cancelStop := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelStop()
+	if err := ingest.Stop(stopContext); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop() error = %v, want success or caller deadline", err)
+	}
+	select {
+	case <-ingest.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("forced shutdown did not complete after caller deadline")
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+	buffer := make([]byte, 1024)
+	for {
+		_, err := connection.Read(buffer)
+		if err == nil {
+			continue
+		}
+		var timeout interface{ Timeout() bool }
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			t.Fatalf("connection remained open until read deadline: %v", err)
+		}
+		break
+	}
+	_ = connection.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("private server did not exit after forced close")
+	}
+}
+
+func TestResilienceIngestStopWithExpiredContextWaitsForForcedClose(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- ingest.Start() }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	if err := ingest.WaitReady(ctx); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	stopContext, cancelStop := context.WithCancel(context.Background())
+	cancelStop()
+	if err := ingest.Stop(stopContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop() with expired context = %v, want immediate caller cancellation", err)
+	}
+	select {
+	case <-ingest.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("private listener shutdown did not complete")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("private listener did not exit after forced close")
+	}
+}
+
+func TestResilienceIngestConcurrentStopWaitsForShutdown(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- ingest.Start() }()
+	active := make(chan struct{}, 1)
+	ingest.http.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateActive {
+			select {
+			case active <- struct{}{}:
+			default:
+			}
+		}
+	}
+	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := ingest.WaitReady(readyContext); err != nil {
+		t.Fatal(err)
+	}
+
+	connection, err := net.Dial("tcp", strings.TrimPrefix(ingest.URL(), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(connection, "POST %s HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer %s\r\nContent-Length: 100\r\n\r\n{", resilienceIngestPath, ingest.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-active:
+	case <-time.After(time.Second):
+		t.Fatal("server did not accept incomplete request")
+	}
+
+	firstStop := make(chan error, 1)
+	secondStop := make(chan error, 1)
+	go func() { firstStop <- ingest.Stop(context.Background()) }()
+	go func() { secondStop <- ingest.Stop(context.Background()) }()
+	for name, result := range map[string]<-chan error{"first": firstStop, "second": secondStop} {
+		select {
+		case err := <-result:
+			if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("%s Stop() = %v", name, err)
+			}
+		case <-time.After(1500 * time.Millisecond):
+			t.Fatalf("%s Stop() did not observe completed shutdown", name)
+		}
+	}
+	_ = connection.Close()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatalf("Start() = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("private listener remained active after concurrent Stop calls")
+	}
+}
+
+func TestResilienceIngestConcurrentStopIsIdempotentWithoutActiveRequests(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- ingest.Start() }()
+	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := ingest.WaitReady(readyContext); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan error, 2)
+	go func() { results <- ingest.Stop(context.Background()) }()
+	go func() { results <- ingest.Stop(context.Background()) }()
+	for range 2 {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("Stop() = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("concurrent Stop() calls did not share shutdown completion")
+		}
+	}
+	if err := <-started; err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+}
+
+func TestResilienceIngestConcurrentStopDoesNotInheritCallerContext(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- ingest.Start() }()
+	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := ingest.WaitReady(readyContext); err != nil {
+		t.Fatal(err)
+	}
+
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	results := make(chan error, 2)
+	canceledStarted := make(chan struct{})
+	go func() {
+		close(canceledStarted)
+		results <- ingest.Stop(canceledContext)
+	}()
+	<-canceledStarted
+	select {
+	case <-ingest.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("canceled caller did not start shared shutdown")
+	}
+	go func() { results <- ingest.Stop(context.Background()) }()
+	if err := <-results; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled caller Stop() = %v, want context canceled", err)
+	}
+	select {
+	case err := <-results:
+		if err != nil {
+			t.Fatalf("valid caller inherited canceled context: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("valid caller did not observe shared shutdown completion")
+	}
+	if err := <-started; err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+}
+
+func TestResilienceIngestRejectsInvalidAndOversizedBodies(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- ingest.Start() }()
+	defer func() { _ = ingest.Stop(context.Background()); <-done }()
+	for _, tt := range []struct {
+		name, body string
+		status     int
+	}{
+		{"oversized", strings.Repeat("x", 65537), http.StatusRequestEntityTooLarge},
+		{"schema", `{"schema_version":"v2","worker_id":"w","sequence":1}`, http.StatusBadRequest},
+		{"name", `{"schema_version":"v1","worker_id":"w","sequence":1,"policies":[{"name":"bad name","features":[]}]}`, http.StatusBadRequest},
+		{"state", `{"schema_version":"v1","worker_id":"w","sequence":1,"policies":[{"name":"payments","features":[]}],"circuits":[{"name":"payments","state":"broken"}]}`, http.StatusBadRequest},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request, _ := http.NewRequest(http.MethodPost, ingest.URL()+"/internal/v1/resilience/snapshot", strings.NewReader(tt.body))
+			request.Header.Set("Authorization", "Bearer "+ingest.Token())
+			request.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != tt.status {
+				t.Fatalf("status = %d, want %d", response.StatusCode, tt.status)
+			}
+		})
+	}
+	if got := ingest.Store().Snapshot(time.Now(), true); got.Status != "unavailable" {
+		t.Fatalf("invalid report stored: %#v", got)
+	}
+}

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -215,5 +216,68 @@ func TestStartUsesGeneratedWorkerUntilProcessStops(t *testing.T) {
 	data, err := os.ReadFile(userWorkerPath)
 	if err != nil || string(data) != "legacy user worker" {
 		t.Fatalf("legacy worker changed: %q, %v", data, err)
+	}
+}
+
+func TestResilienceCredentialsReachOnlyEnabledRoadRunnerChild(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "enabled"}[enabled], func(t *testing.T) {
+			root := t.TempDir()
+			writeValidBootstrap(t, root)
+			cfg := config.DefaultConfig()
+			cfg.ProjectRoot = root
+			cfg.Control.Enabled = enabled
+			if enabled {
+				reserved, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg.Control.Port = reserved.Addr().(*net.TCPAddr).Port
+				reserved.Close()
+			}
+			var address string
+			factory := &observingFactory{check: func(spec engineRuntime.ProcessSpec) error {
+				vars := make(map[string]string)
+				for _, entry := range spec.Env {
+					key, value, _ := strings.Cut(entry, "=")
+					vars[key] = value
+				}
+				address = vars["TUSK_ENGINE_RESILIENCE_DIAGNOSTICS_URL"]
+				token := vars["TUSK_ENGINE_RESILIENCE_DIAGNOSTICS_TOKEN"]
+				projected, err := os.ReadFile(spec.Args[2])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(projected), "TUSK_ENGINE_RESILIENCE_DIAGNOSTICS_") || (token != "" && strings.Contains(string(projected), token)) {
+					t.Fatal("private credentials written to RoadRunner config")
+				}
+				if !enabled {
+					if address != "" || token != "" {
+						t.Fatal("disabled control injected diagnostics")
+					}
+					return nil
+				}
+				if !strings.HasPrefix(address, "http://127.0.0.1:") || len(token) < 32 {
+					t.Fatal("missing loopback diagnostics credentials")
+				}
+				connection, err := net.DialTimeout("tcp", strings.TrimPrefix(address, "http://"), time.Second)
+				if err != nil {
+					t.Fatalf("listener was not bound before RoadRunner start: %v", err)
+				}
+				connection.Close()
+				return nil
+			}}
+			err := runServerWithConfigUsing(cfg, factory, func(string, toolchain.ToolName) (toolchain.Tool, error) { return toolchain.Tool{Path: "rr-test"}, nil })
+			if err == nil || !strings.Contains(err.Error(), "injected process start failure") {
+				t.Fatalf("start error = %v", err)
+			}
+			if enabled {
+				connection, err := net.DialTimeout("tcp", strings.TrimPrefix(address, "http://"), 100*time.Millisecond)
+				if err == nil {
+					connection.Close()
+					t.Fatal("private listener survived failed startup")
+				}
+			}
+		})
 	}
 }

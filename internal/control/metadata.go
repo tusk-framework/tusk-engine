@@ -3,6 +3,7 @@ package control
 import (
 	"runtime"
 	"sort"
+	"time"
 
 	"github.com/tusk-framework/tusk-engine/internal/components"
 )
@@ -18,6 +19,7 @@ type Metadata struct {
 	Capabilities   []string
 	RemoteAccess   bool
 	Components     []components.Descriptor
+	Resilience     *ResilienceIngestServer
 }
 
 type metadataResponse struct {
@@ -27,6 +29,11 @@ type metadataResponse struct {
 	Capabilities []string                `json:"capabilities"`
 	Control      metadataControl         `json:"control"`
 	Components   []components.Descriptor `json:"components,omitempty"`
+	Application  metadataApplication     `json:"application"`
+}
+
+type metadataApplication struct {
+	Resilience ResilienceSummary `json:"resilience"`
 }
 
 type metadataEngine struct {
@@ -47,6 +54,10 @@ type metadataControl struct {
 }
 
 func (m Metadata) safeResponse(remoteAccess bool) metadataResponse {
+	resilience := ResilienceSummary{SchemaVersion: "v1", Status: "unavailable", Policies: []ResiliencePolicy{}, Circuits: []ResilienceCircuitSummary{}}
+	if m.Resilience != nil {
+		resilience = m.Resilience.Store().Snapshot(time.Now(), !remoteAccess)
+	}
 	capabilities := append([]string(nil), m.Capabilities...)
 	descriptors := make([]components.Descriptor, 0, len(m.Components))
 	for _, descriptor := range m.Components {
@@ -82,6 +93,7 @@ func (m Metadata) safeResponse(remoteAccess bool) metadataResponse {
 		Control: metadataControl{
 			RemoteAccess: remoteAccess,
 		},
-		Components: descriptors,
+		Components:  descriptors,
+		Application: metadataApplication{Resilience: resilience},
 	}
 }
