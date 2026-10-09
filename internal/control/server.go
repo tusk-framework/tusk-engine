@@ -16,14 +16,16 @@ import (
 )
 
 type Server struct {
-	cfg      config.ControlConfig
-	provider SnapshotProvider
-	metadata Metadata
-	metrics  http.Handler
-	mu       sync.Mutex
-	http     *http.Server
-	ready    chan struct{}
-	startErr chan error
+	cfg        config.ControlConfig
+	provider   SnapshotProvider
+	metadata   Metadata
+	metrics    http.Handler
+	resilience *ResilienceIngestServer
+	mu         sync.Mutex
+	http       *http.Server
+	stopping   bool
+	ready      chan struct{}
+	startErr   chan error
 }
 
 func NewServer(cfg config.ControlConfig, provider SnapshotProvider, metadata Metadata, metricsHandlers ...http.Handler) (*Server, error) {
@@ -43,12 +45,13 @@ func NewServer(cfg config.ControlConfig, provider SnapshotProvider, metadata Met
 	}
 
 	return &Server{
-		cfg:      cfg,
-		provider: provider,
-		metadata: metadata,
-		metrics:  metricHandler,
-		ready:    make(chan struct{}),
-		startErr: make(chan error, 1),
+		cfg:        cfg,
+		provider:   provider,
+		metadata:   metadata,
+		metrics:    metricHandler,
+		resilience: metadata.Resilience,
+		ready:      make(chan struct{}),
+		startErr:   make(chan error, 1),
 	}, nil
 }
 
@@ -82,12 +85,41 @@ func (s *Server) Start() error {
 	}
 
 	server := &http.Server{Handler: s.Handler()}
+	var privateDone chan error
+	if s.resilience != nil {
+		privateDone = make(chan error, 1)
+		go func() { privateDone <- s.resilience.Start() }()
+		readyContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := s.resilience.WaitReady(readyContext)
+		cancel()
+		if err != nil {
+			_ = s.resilience.Stop(context.Background())
+			s.startErr <- fmt.Errorf("private resilience receiver readiness: %w", err)
+			return fmt.Errorf("private resilience receiver readiness: %w", err)
+		}
+	}
 	s.mu.Lock()
 	s.http = server
 	s.mu.Unlock()
 	close(s.ready)
 
-	err = server.Serve(listener)
+	publicDone := make(chan error, 1)
+	go func() { publicDone <- server.Serve(listener) }()
+	select {
+	case err = <-privateDone:
+		s.mu.Lock()
+		stopping := s.stopping
+		s.mu.Unlock()
+		_ = server.Close()
+		if stopping && err == nil {
+			return nil
+		}
+		if err == nil {
+			return fmt.Errorf("private resilience receiver stopped unexpectedly")
+		}
+		return fmt.Errorf("private resilience receiver failed: %w", err)
+	case err = <-publicDone:
+	}
 	if err == http.ErrServerClosed {
 		return nil
 	}
@@ -101,6 +133,11 @@ func (s *Server) WaitReady(ctx context.Context) error {
 
 	select {
 	case <-s.ready:
+		if s.resilience != nil {
+			if err := s.resilience.WaitReady(ctx); err != nil {
+				return fmt.Errorf("private resilience receiver readiness: %w", err)
+			}
+		}
 		return nil
 	case err := <-s.startErr:
 		return err
@@ -111,12 +148,19 @@ func (s *Server) WaitReady(ctx context.Context) error {
 
 func (s *Server) Stop(ctx context.Context) error {
 	s.mu.Lock()
+	s.stopping = true
 	server := s.http
 	s.mu.Unlock()
-	if server == nil {
-		return nil
+	var err error
+	if server != nil {
+		err = server.Shutdown(ctx)
 	}
-	return server.Shutdown(ctx)
+	if s.resilience != nil {
+		if stopErr := s.resilience.Stop(ctx); stopErr != nil && err == nil {
+			err = stopErr
+		}
+	}
+	return err
 }
 
 func (s *Server) protected(next http.Handler) http.Handler {

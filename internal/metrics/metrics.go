@@ -42,6 +42,11 @@ var (
 		Name: "tusk_roadrunner_metrics_up",
 		Help: "Whether the latest local RoadRunner metrics scrape succeeded.",
 	})
+
+	ResilienceReportsRejected = promauto.With(Registry).NewCounter(prometheus.CounterOpts{
+		Name: "tusk_resilience_reports_rejected_total",
+		Help: "Total number of rejected private resilience reports.",
+	})
 )
 
 // NewHandler returns a Prometheus handler that exposes Engine metrics and,

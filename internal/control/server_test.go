@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -286,5 +287,90 @@ func TestServerBindsBeforeReportingReadyAndStops(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("server did not stop")
+	}
+}
+
+func TestResilienceServerStopClearsRunAndClosesPrivateListener(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := reserved.Addr().(*net.TCPAddr).Port
+	reserved.Close()
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(config.ControlConfig{Enabled: true, Address: "127.0.0.1", Port: port}, fakeProvider{snapshot: readySnapshot()}, Metadata{Resilience: ingest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.Start() }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := server.WaitReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.Store().Record(report("worker", 1, "payments", "open"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if ingest.Store().Snapshot(time.Now(), true).Status != "unavailable" || ingest.Token() != "" {
+		t.Fatal("private run state survived stop")
+	}
+	connection, err := net.DialTimeout("tcp", strings.TrimPrefix(ingest.URL(), "http://"), 100*time.Millisecond)
+	if err == nil {
+		connection.Close()
+		t.Fatal("private listener still accepts connections")
+	}
+	next, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Stop(context.Background())
+	if next.Token() == "" || next.Token() == ingest.Token() || next.Store().Snapshot(time.Now(), true).Status != "unavailable" {
+		t.Fatal("new run reused old state")
+	}
+}
+
+func TestResilienceServerPropagatesPrivateServeFailure(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := reserved.Addr().(*net.TCPAddr).Port
+	reserved.Close()
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(config.ControlConfig{Enabled: true, Address: "127.0.0.1", Port: port}, fakeProvider{snapshot: readySnapshot()}, Metadata{Resilience: ingest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.Start() }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := server.WaitReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("private listener failure was hidden")
+		}
+	case <-ctx.Done():
+		_ = server.Stop(context.Background())
+		t.Fatal("control server did not report private listener failure")
 	}
 }

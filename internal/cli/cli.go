@@ -516,6 +516,25 @@ func runServerWithConfigUsing(cfg *config.Config, factory engineRuntime.ProcessF
 			}
 		}
 	}()
+	var ingest *control.ResilienceIngestServer
+	var processEnv []string
+	if cfg.Control.Enabled {
+		ingest, err = control.NewResilienceIngestServer()
+		if err != nil {
+			return fmt.Errorf("bind private resilience receiver: %w", err)
+		}
+		defer func() {
+			shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if stopErr := ingest.Stop(shutdownContext); stopErr != nil {
+				result = errors.Join(result, fmt.Errorf("stop private resilience receiver: %w", stopErr))
+			}
+		}()
+		processEnv = []string{
+			"TUSK_ENGINE_RESILIENCE_DIAGNOSTICS_URL=" + ingest.URL(),
+			"TUSK_ENGINE_RESILIENCE_DIAGNOSTICS_TOKEN=" + ingest.Token(),
+		}
+	}
 
 	manager := engineRuntime.NewManager(
 		factory,
@@ -524,6 +543,7 @@ func runServerWithConfigUsing(cfg *config.Config, factory engineRuntime.ProcessF
 			Args:           []string{"serve", "-c", configFile.Path},
 			ReloadArgs:     []string{"reset", "-c", configFile.Path},
 			Dir:            cfg.ProjectRoot,
+			Env:            processEnv,
 			DesiredWorkers: cfg.WorkerCount,
 		},
 	)
@@ -539,6 +559,7 @@ func runServerWithConfigUsing(cfg *config.Config, factory engineRuntime.ProcessF
 			TimeoutSeconds: cfg.Timeout,
 			Capabilities:   []string{"roadrunner", "persistent-workers", "metrics"},
 			Components:     descriptors,
+			Resilience:     ingest,
 		}, metricsHandler)
 	}
 	app, err := engine.NewFromConfig(cfg, engine.Options{
