@@ -3,6 +3,8 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -460,4 +462,59 @@ func TestResilienceServerStopWithExpiredContextForceClosesBothListeners(t *testi
 		t.Fatalf("private listener remained bound: %v", err)
 	}
 	private.Close()
+}
+
+func TestResilienceServerStopWithExpiredContextClosesActivePublicConnection(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := reserved.Addr().(*net.TCPAddr).Port
+	reserved.Close()
+	server, err := NewServer(config.ControlConfig{Enabled: true, Address: "127.0.0.1", Port: port}, fakeProvider{snapshot: readySnapshot()}, Metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- server.Start() }()
+	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := server.WaitReady(readyContext); err != nil {
+		t.Fatal(err)
+	}
+
+	connection, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(connection, "GET /v1/readyz HTTP/1.1\r\nHost: localhost\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopContext, cancelStop := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelStop()
+	if err := server.Stop(stopContext); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+	for {
+		_, err := connection.Read(make([]byte, 1024))
+		if err == nil {
+			continue
+		}
+		var timeout interface{ Timeout() bool }
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			t.Fatal("active public connection remained open after forced shutdown")
+		}
+		break
+	}
+	_ = connection.Close()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatalf("Start() = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("public server remained active after forced shutdown")
+	}
 }
