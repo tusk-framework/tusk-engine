@@ -117,6 +117,15 @@ func (s *ResilienceIngestServer) WaitReady(ctx context.Context) error {
 			return terminalError()
 		default:
 		}
+		s.mu.Lock()
+		stopped, err := s.stopped, s.startErr
+		s.mu.Unlock()
+		if stopped {
+			if err != nil {
+				return err
+			}
+			return errors.New("resilience ingest stopped before readiness")
+		}
 		return nil
 	case <-s.done:
 		return terminalError()

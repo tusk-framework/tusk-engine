@@ -175,6 +175,23 @@ func TestResilienceIngestWaitReadyReportsFailureAndStopBeforeStart(t *testing.T)
 	}
 }
 
+func TestResilienceIngestWaitReadyRejectsRecordedFailureBeforeDoneSignal(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(ingest.ready)
+	ingest.mu.Lock()
+	ingest.stopped = true
+	ingest.startErr = errors.New("listener failed")
+	ingest.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ingest.WaitReady(ctx); err == nil || !strings.Contains(err.Error(), "listener failed") {
+		t.Fatalf("WaitReady() = %v, want recorded listener failure", err)
+	}
+}
+
 func TestResilienceIngestShutdownClosesIncompleteRequest(t *testing.T) {
 	ingest, err := NewResilienceIngestServer()
 	if err != nil {
@@ -217,6 +234,11 @@ func TestResilienceIngestShutdownClosesIncompleteRequest(t *testing.T) {
 	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := connection.Read(make([]byte, 1)); err == nil {
 		t.Fatal("incomplete request connection remained open after Stop")
+	} else {
+		var timeout interface{ Timeout() bool }
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			t.Fatalf("connection remained open until read deadline: %v", err)
+		}
 	}
 	_ = connection.Close()
 	select {
