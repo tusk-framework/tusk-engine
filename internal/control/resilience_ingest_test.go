@@ -229,23 +229,55 @@ func TestResilienceIngestShutdownClosesIncompleteRequest(t *testing.T) {
 	}
 	stopContext, cancelStop := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancelStop()
-	if err := ingest.Stop(stopContext); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Stop() error = %v, want deadline exceeded after forced close", err)
+	if err := ingest.Stop(stopContext); err != nil {
+		t.Fatalf("Stop() error = %v, want successful forced close", err)
 	}
 	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := connection.Read(make([]byte, 1)); err == nil {
-		t.Fatal("incomplete request connection remained open after Stop")
-	} else {
+	buffer := make([]byte, 1024)
+	for {
+		_, err := connection.Read(buffer)
+		if err == nil {
+			continue
+		}
 		var timeout interface{ Timeout() bool }
 		if errors.As(err, &timeout) && timeout.Timeout() {
 			t.Fatalf("connection remained open until read deadline: %v", err)
 		}
+		break
 	}
 	_ = connection.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("private server did not exit after forced close")
+	}
+}
+
+func TestResilienceIngestStopWithExpiredContextWaitsForForcedClose(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- ingest.Start() }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	if err := ingest.WaitReady(ctx); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	stopContext, cancelStop := context.WithCancel(context.Background())
+	cancelStop()
+	if err := ingest.Stop(stopContext); err != nil {
+		t.Fatalf("Stop() with expired context = %v, want forced shutdown success", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("private listener did not exit after forced close")
 	}
 }
 

@@ -318,6 +318,9 @@ func TestResilienceServerStopClearsRunAndClosesPrivateListener(t *testing.T) {
 	if err := server.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := ingest.Stop(ctx); err != nil {
+		t.Fatalf("deferred second receiver stop failed: %v", err)
+	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -410,4 +413,51 @@ func TestResiliencePrivateReadinessFailureReleasesPublicListener(t *testing.T) {
 		t.Fatalf("public listener leaked after startup failure: %v", err)
 	}
 	public.Close()
+}
+
+func TestResilienceServerStopWithExpiredContextForceClosesBothListeners(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := reserved.Addr().(*net.TCPAddr).Port
+	reserved.Close()
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(config.ControlConfig{Enabled: true, Address: "127.0.0.1", Port: port}, fakeProvider{snapshot: readySnapshot()}, Metadata{Resilience: ingest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.Start() }()
+	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := server.WaitReady(readyContext); err != nil {
+		t.Fatal(err)
+	}
+	stopContext, cancelStop := context.WithCancel(context.Background())
+	cancelStop()
+	if err := server.Stop(stopContext); err != nil {
+		t.Fatalf("Stop() with expired context = %v, want forced shutdown success", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("control server did not exit after forced close")
+	}
+	public, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("public listener remained bound: %v", err)
+	}
+	public.Close()
+	private, err := net.Listen("tcp", strings.TrimPrefix(ingest.URL(), "http://"))
+	if err != nil {
+		t.Fatalf("private listener remained bound: %v", err)
+	}
+	private.Close()
 }

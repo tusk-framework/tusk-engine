@@ -156,11 +156,18 @@ func (s *ResilienceIngestServer) Stop(ctx context.Context) error {
 	if !started {
 		s.doneOnce.Do(func() { close(s.done) })
 	} else {
+		waitContext := ctx
+		var cancel context.CancelFunc
+		if ctx.Err() != nil || err != nil {
+			waitContext, cancel = context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+		}
 		select {
 		case <-s.done:
-		case <-ctx.Done():
+			err = nil
+		case <-waitContext.Done():
 			if err == nil {
-				err = ctx.Err()
+				err = waitContext.Err()
 			}
 		}
 	}

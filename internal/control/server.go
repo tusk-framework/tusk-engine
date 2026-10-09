@@ -155,6 +155,14 @@ func (s *Server) Stop(ctx context.Context) error {
 	var err error
 	if server != nil {
 		err = server.Shutdown(ctx)
+		if err != nil {
+			closeErr := server.Close()
+			if closeErr == nil {
+				err = nil
+			} else {
+				err = fmt.Errorf("shutdown control server: %w; force close: %v", err, closeErr)
+			}
+		}
 	}
 	if s.resilience != nil {
 		if stopErr := s.resilience.Stop(ctx); stopErr != nil && err == nil {
