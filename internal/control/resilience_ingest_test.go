@@ -180,6 +180,7 @@ func TestResilienceIngestWaitReadyRejectsRecordedFailureBeforeDoneSignal(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = ingest.Stop(context.Background()) })
 	close(ingest.ready)
 	ingest.mu.Lock()
 	ingest.stopped = true
