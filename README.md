@@ -16,6 +16,7 @@ readiness, diagnostics, and control APIs around that runtime.
 - **Configuration boundaries**: `tusk.json` sets platform options; `composer.json` owns dependencies and scripts; `config/*.php` holds application settings.
 - **Package Management**: Composer-backed convenience commands; Composer remains the dependency resolver and lockfile authority.
 - **Project CLI**: The `tusk` binary handles project management, dependency commands, diagnostics, and framework commands.
+- **Offline documentation**: `tusk docs` lists the version-matched guides embedded in the Engine binary.
 - **Project bootstrap**: Requires an application returned from `bootstrap/app.php`; the Engine generates the RoadRunner worker.
 - **Process Management**: Supervises the RoadRunner process and reports runtime failures.
 - **Control API**: Optional, versioned health, readiness, metadata, and Prometheus endpoints for local operations.
