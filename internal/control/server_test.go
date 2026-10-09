@@ -441,8 +441,8 @@ func TestResilienceServerStopWithExpiredContextForceClosesBothListeners(t *testi
 	}
 	stopContext, cancelStop := context.WithCancel(context.Background())
 	cancelStop()
-	if err := server.Stop(stopContext); err != nil {
-		t.Fatalf("Stop() with expired context = %v, want forced shutdown success", err)
+	if err := server.Stop(stopContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop() with expired context = %v, want immediate caller cancellation", err)
 	}
 	select {
 	case err := <-done:
@@ -451,6 +451,11 @@ func TestResilienceServerStopWithExpiredContextForceClosesBothListeners(t *testi
 		}
 	case <-time.After(time.Second):
 		t.Fatal("control server did not exit after forced close")
+	}
+	select {
+	case <-ingest.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("private receiver shutdown did not complete")
 	}
 	public, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {

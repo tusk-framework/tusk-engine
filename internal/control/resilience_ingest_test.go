@@ -229,8 +229,13 @@ func TestResilienceIngestShutdownClosesIncompleteRequest(t *testing.T) {
 	}
 	stopContext, cancelStop := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancelStop()
-	if err := ingest.Stop(stopContext); err != nil {
-		t.Fatalf("Stop() error = %v, want successful forced close", err)
+	if err := ingest.Stop(stopContext); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop() error = %v, want success or caller deadline", err)
+	}
+	select {
+	case <-ingest.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("forced shutdown did not complete after caller deadline")
 	}
 	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
 	buffer := make([]byte, 1024)
@@ -268,8 +273,13 @@ func TestResilienceIngestStopWithExpiredContextWaitsForForcedClose(t *testing.T)
 	cancel()
 	stopContext, cancelStop := context.WithCancel(context.Background())
 	cancelStop()
-	if err := ingest.Stop(stopContext); err != nil {
-		t.Fatalf("Stop() with expired context = %v, want forced shutdown success", err)
+	if err := ingest.Stop(stopContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop() with expired context = %v, want immediate caller cancellation", err)
+	}
+	select {
+	case <-ingest.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("private listener shutdown did not complete")
 	}
 	select {
 	case err := <-done:
@@ -389,17 +399,28 @@ func TestResilienceIngestConcurrentStopDoesNotInheritCallerContext(t *testing.T)
 	canceledContext, cancel := context.WithCancel(context.Background())
 	cancel()
 	results := make(chan error, 2)
-	go func() { results <- ingest.Stop(canceledContext) }()
+	canceledStarted := make(chan struct{})
+	go func() {
+		close(canceledStarted)
+		results <- ingest.Stop(canceledContext)
+	}()
+	<-canceledStarted
+	select {
+	case <-ingest.stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("canceled caller did not start shared shutdown")
+	}
 	go func() { results <- ingest.Stop(context.Background()) }()
-	for range 2 {
-		select {
-		case err := <-results:
-			if err != nil {
-				t.Fatalf("Stop() = %v", err)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("concurrent Stop() did not complete")
+	if err := <-results; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled caller Stop() = %v, want context canceled", err)
+	}
+	select {
+	case err := <-results:
+		if err != nil {
+			t.Fatalf("valid caller inherited canceled context: %v", err)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("valid caller did not observe shared shutdown completion")
 	}
 	if err := <-started; err != nil {
 		t.Fatalf("Start() = %v", err)

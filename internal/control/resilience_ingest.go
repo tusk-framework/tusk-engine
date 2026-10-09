@@ -152,14 +152,7 @@ func (s *ResilienceIngestServer) Stop(ctx context.Context) error {
 	case <-s.stopDone:
 		return s.stopErr
 	case <-ctx.Done():
-		waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		select {
-		case <-s.stopDone:
-			return s.stopErr
-		case <-waitContext.Done():
-			return waitContext.Err()
-		}
+		return ctx.Err()
 	}
 }
 
