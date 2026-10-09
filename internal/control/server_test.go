@@ -441,8 +441,8 @@ func TestResilienceServerStopWithExpiredContextForceClosesBothListeners(t *testi
 	}
 	stopContext, cancelStop := context.WithCancel(context.Background())
 	cancelStop()
-	if err := server.Stop(stopContext); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Stop() with expired context = %v, want immediate caller cancellation", err)
+	if err := server.Stop(stopContext); err != nil {
+		t.Fatalf("Stop() with expired context = %v, want forced cleanup success", err)
 	}
 	select {
 	case err := <-done:

@@ -153,19 +153,27 @@ func (s *Server) Stop(ctx context.Context) error {
 	server := s.http
 	s.mu.Unlock()
 	var err error
+	forcedClose := false
 	if server != nil {
 		err = server.Shutdown(ctx)
 		if err != nil {
 			closeErr := server.Close()
 			if closeErr == nil {
 				err = nil
+				forcedClose = true
 			} else {
 				err = fmt.Errorf("shutdown control server: %w; force close: %v", err, closeErr)
 			}
 		}
 	}
 	if s.resilience != nil {
-		if stopErr := s.resilience.Stop(ctx); stopErr != nil && err == nil {
+		stopContext := ctx
+		var cancel context.CancelFunc
+		if forcedClose || ctx.Err() != nil {
+			stopContext, cancel = context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+		}
+		if stopErr := s.resilience.Stop(stopContext); stopErr != nil && err == nil {
 			err = stopErr
 		}
 	}
