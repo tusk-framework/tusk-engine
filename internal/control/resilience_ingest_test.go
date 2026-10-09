@@ -373,6 +373,39 @@ func TestResilienceIngestConcurrentStopIsIdempotentWithoutActiveRequests(t *test
 	}
 }
 
+func TestResilienceIngestConcurrentStopDoesNotInheritCallerContext(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- ingest.Start() }()
+	readyContext, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := ingest.WaitReady(readyContext); err != nil {
+		t.Fatal(err)
+	}
+
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	results := make(chan error, 2)
+	go func() { results <- ingest.Stop(canceledContext) }()
+	go func() { results <- ingest.Stop(context.Background()) }()
+	for range 2 {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("Stop() = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("concurrent Stop() did not complete")
+		}
+	}
+	if err := <-started; err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+}
+
 func TestResilienceIngestRejectsInvalidAndOversizedBodies(t *testing.T) {
 	ingest, err := NewResilienceIngestServer()
 	if err != nil {

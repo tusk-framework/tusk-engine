@@ -144,7 +144,7 @@ func (s *ResilienceIngestServer) Stop(ctx context.Context) error {
 	}
 	s.stopOnce.Do(func() {
 		go func() {
-			s.stopErr = s.stop(ctx)
+			s.stopErr = s.stop()
 			close(s.stopDone)
 		}()
 	})
@@ -163,7 +163,7 @@ func (s *ResilienceIngestServer) Stop(ctx context.Context) error {
 	}
 }
 
-func (s *ResilienceIngestServer) stop(ctx context.Context) error {
+func (s *ResilienceIngestServer) stop() error {
 	s.mu.Lock()
 	started := s.started
 	if !s.stopped {
