@@ -83,6 +83,7 @@ func (s *Server) Start() error {
 		s.startErr <- err
 		return err
 	}
+	defer listener.Close()
 
 	server := &http.Server{Handler: s.Handler()}
 	var privateDone chan error

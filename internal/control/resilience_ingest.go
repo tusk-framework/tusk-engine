@@ -35,6 +35,7 @@ type ResilienceIngestServer struct {
 	ready    chan struct{}
 	done     chan struct{}
 	startErr error
+	doneOnce sync.Once
 }
 
 func NewResilienceIngestServer() (*ResilienceIngestServer, error) {
@@ -54,7 +55,7 @@ func NewResilienceIngestServer() (*ResilienceIngestServer, error) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(resilienceIngestPath, s.handleSnapshot)
-	s.http = &http.Server{Handler: mux}
+	s.http = &http.Server{Handler: mux, ReadHeaderTimeout: time.Second, ReadTimeout: 5 * time.Second}
 	return s, nil
 }
 
@@ -79,22 +80,23 @@ func (s *ResilienceIngestServer) Start() error {
 	s.mu.Unlock()
 	err := s.http.Serve(s.listener)
 	s.mu.Lock()
-	if s.stopped && (err == http.ErrServerClosed || errors.Is(err, net.ErrClosed)) {
+	stopped := s.stopped
+	if stopped && (err == http.ErrServerClosed || errors.Is(err, net.ErrClosed)) {
 		err = nil
 	}
 	s.startErr = err
 	s.stopped = true
 	s.token = ""
 	s.mu.Unlock()
-	close(s.done)
+	if err != nil && !stopped {
+		_ = s.http.Close()
+	}
+	s.doneOnce.Do(func() { close(s.done) })
 	return err
 }
 
 func (s *ResilienceIngestServer) WaitReady(ctx context.Context) error {
-	select {
-	case <-s.ready:
-		return nil
-	case <-s.done:
+	terminalError := func() error {
 		s.mu.Lock()
 		err := s.startErr
 		s.mu.Unlock()
@@ -102,6 +104,22 @@ func (s *ResilienceIngestServer) WaitReady(ctx context.Context) error {
 			return errors.New("resilience ingest stopped before readiness")
 		}
 		return err
+	}
+	select {
+	case <-s.done:
+		return terminalError()
+	default:
+	}
+	select {
+	case <-s.ready:
+		select {
+		case <-s.done:
+			return terminalError()
+		default:
+		}
+		return nil
+	case <-s.done:
+		return terminalError()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -109,17 +127,26 @@ func (s *ResilienceIngestServer) WaitReady(ctx context.Context) error {
 
 func (s *ResilienceIngestServer) Stop(ctx context.Context) error {
 	s.mu.Lock()
-	if s.stopped {
-		s.mu.Unlock()
-		return nil
-	}
-	s.stopped = true
-	s.token = ""
 	started := s.started
+	if !s.stopped {
+		s.stopped = true
+		s.token = ""
+	}
+	if !started {
+		s.startErr = errors.New("resilience ingest stopped before start")
+	}
 	s.mu.Unlock()
-	_ = s.listener.Close()
-	err := s.http.Shutdown(ctx)
+	var err error
 	if started {
+		err = s.http.Shutdown(ctx)
+		if err != nil {
+			_ = s.http.Close()
+		}
+	}
+	_ = s.listener.Close()
+	if !started {
+		s.doneOnce.Do(func() { close(s.done) })
+	} else {
 		select {
 		case <-s.done:
 		case <-ctx.Done():

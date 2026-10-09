@@ -28,13 +28,15 @@ func TestResilienceDiagnosticsBounds(t *testing.T) {
 		t.Fatal("accepted 257 policies")
 	}
 	tooMany = report("worker", 1, "payments", "open")
-	for i := 0; i < 256; i++ {
+	for i := 0; i < 255; i++ {
 		name := fmt.Sprintf("policy-%d", i)
 		tooMany.Policies = append(tooMany.Policies, ResiliencePolicy{Name: name})
-		tooMany.Circuits = append(tooMany.Circuits, ResilienceCircuit{Name: name, State: "closed"})
 	}
-	if err := store.Record(tooMany, now); err == nil {
-		t.Fatal("accepted 257 circuits")
+	for i := 0; i < 256; i++ {
+		tooMany.Circuits = append(tooMany.Circuits, ResilienceCircuit{Name: fmt.Sprintf("circuit-%d", i), State: "closed"})
+	}
+	if err := store.Record(tooMany, now); err == nil || !strings.Contains(err.Error(), "circuits limit") {
+		t.Fatalf("257 circuits error = %v, want circuits limit", err)
 	}
 	for i := 0; i < 4096; i++ {
 		if err := store.Record(WorkerResilienceReport{SchemaVersion: "v1", WorkerID: fmt.Sprintf("worker-%d", i), Sequence: 1}, now); err != nil {

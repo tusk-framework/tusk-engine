@@ -91,8 +91,14 @@ func (s *ResilienceDiagnosticsStore) Record(report WorkerResilienceReport, recei
 }
 
 func validateResilienceReport(report WorkerResilienceReport) error {
-	if report.SchemaVersion != "v1" || !validResilienceIdentifier(report.WorkerID) || report.Sequence == 0 || len(report.Policies) > maxResilienceEntries || len(report.Circuits) > maxResilienceEntries {
+	if report.SchemaVersion != "v1" || !validResilienceIdentifier(report.WorkerID) || report.Sequence == 0 {
 		return errors.New("invalid resilience report")
+	}
+	if len(report.Policies) > maxResilienceEntries {
+		return errors.New("resilience policies limit exceeded")
+	}
+	if len(report.Circuits) > maxResilienceEntries {
+		return errors.New("resilience circuits limit exceeded")
 	}
 	policies := make(map[string]bool, len(report.Policies))
 	for _, policy := range report.Policies {

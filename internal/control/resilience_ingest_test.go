@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -139,6 +141,88 @@ func TestResilienceIngestWaitReadyAndStopWaitsForServe(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("Stop() returned before private server stopped")
+	}
+}
+
+func TestResilienceIngestWaitReadyReportsFailureAndStopBeforeStart(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	startDone := make(chan error, 1)
+	go func() { startDone <- ingest.Start() }()
+	if err := <-startDone; err == nil {
+		t.Fatal("Start() hid listener failure")
+	}
+	if err := ingest.WaitReady(context.Background()); err == nil {
+		t.Fatal("WaitReady() succeeded after listener failure")
+	}
+
+	stopped, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stopped.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := stopped.WaitReady(ctx); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitReady() after stop-before-start = %v, want immediate stopped error", err)
+	}
+}
+
+func TestResilienceIngestShutdownClosesIncompleteRequest(t *testing.T) {
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := make(chan struct{}, 1)
+	ingest.http.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateActive {
+			select {
+			case active <- struct{}{}:
+			default:
+			}
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- ingest.Start() }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := ingest.WaitReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.Dial("tcp", strings.TrimPrefix(ingest.URL(), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(connection, "POST %s HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{", resilienceIngestPath, ingest.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-active:
+	case <-time.After(time.Second):
+		t.Fatal("server did not accept incomplete request")
+	}
+	stopContext, cancelStop := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelStop()
+	if err := ingest.Stop(stopContext); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop() error = %v, want deadline exceeded after forced close", err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := connection.Read(make([]byte, 1)); err == nil {
+		t.Fatal("incomplete request connection remained open after Stop")
+	}
+	_ = connection.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("private server did not exit after forced close")
 	}
 }
 

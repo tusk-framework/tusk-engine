@@ -364,6 +364,9 @@ func TestResilienceServerPropagatesPrivateServeFailure(t *testing.T) {
 	if err := ingest.listener.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := ingest.Store().Record(report("worker", 1, "payments", "open"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case err := <-done:
 		if err == nil {
@@ -373,4 +376,38 @@ func TestResilienceServerPropagatesPrivateServeFailure(t *testing.T) {
 		_ = server.Stop(context.Background())
 		t.Fatal("control server did not report private listener failure")
 	}
+	if err := server.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ingest.Store().Snapshot(time.Now(), true).Status != "unavailable" {
+		t.Fatal("private run state survived unexpected listener failure")
+	}
+}
+
+func TestResiliencePrivateReadinessFailureReleasesPublicListener(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := reserved.Addr().(*net.TCPAddr).Port
+	reserved.Close()
+	ingest, err := NewResilienceIngestServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(config.ControlConfig{Enabled: true, Address: "127.0.0.1", Port: port}, fakeProvider{snapshot: readySnapshot()}, Metadata{Resilience: ingest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err == nil {
+		t.Fatal("Start() succeeded with unavailable private listener")
+	}
+	public, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("public listener leaked after startup failure: %v", err)
+	}
+	public.Close()
 }
