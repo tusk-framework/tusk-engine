@@ -356,7 +356,13 @@ Everything through one command:
 - Server management: `tusk start`, `tusk dev`
 - Package management: `tusk install`, `tusk add`, `tusk update`
 - Script execution: `tusk run <script>` or `tusk <script>`
-- Framework commands: `tusk make:controller` (proxied to PHP)
+- Framework commands: `tusk list`, `tusk make:controller Example` (forwarded to the Composer-installed `vendor/bin/tusk` using the configured PHP runtime)
+
+Engine built-ins and project scripts configured in `tusk.json` or `composer.json`
+take precedence over Framework command forwarding. Run `tusk install` first so
+Composer has installed the Framework CLI. On Windows, Engine invokes Composer's
+PHP proxy directly instead of routing arguments through the generated `.bat`
+shell wrapper.
 
 ### 📋 Composer Integration
 Tusk reads the relevant `composer.json` fields, including:
