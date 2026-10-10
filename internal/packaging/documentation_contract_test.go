@@ -61,7 +61,7 @@ func TestOfflineDocsPackagingContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read guides index: %v", err)
 	}
-	if !strings.Contains(string(readme), "tusk docs") || !strings.Contains(string(guides), "../user-guide/index.md") {
+	if !strings.Contains(string(readme), "docs/user-guide/index.md") || !strings.Contains(string(guides), "../user-guide/index.md") {
 		t.Fatal("repository documentation must link to the canonical offline user guide")
 	}
 }
