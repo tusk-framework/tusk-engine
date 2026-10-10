@@ -22,7 +22,6 @@ import (
 	"github.com/tusk-framework/tusk-engine/internal/control"
 	engine "github.com/tusk-framework/tusk-engine/internal/engine"
 	"github.com/tusk-framework/tusk-engine/internal/metrics"
-	"github.com/tusk-framework/tusk-engine/internal/php"
 	"github.com/tusk-framework/tusk-engine/internal/roadrunner"
 	engineRuntime "github.com/tusk-framework/tusk-engine/internal/runtime"
 	"github.com/tusk-framework/tusk-engine/internal/toolchain"
@@ -654,35 +653,12 @@ func runScript(script string, extraArgs []string) {
 }
 
 func proxyToPHPWithConfig(cfg *config.Config, args []string) {
-	// Initialize PHP Manager to find the binary
-	mgr, err := php.NewManager(cfg.PhpBinary)
-	if err != nil {
-		log.Fatalf("Error resolving PHP: %v", err)
-	}
-
-	// Target script: user's "tusk" script or "console"
-	script := "tusk"
-	if _, err := os.Stat(script); os.IsNotExist(err) {
-		if _, err := os.Stat("console"); err == nil {
-			script = "console"
-		} else {
-			log.Fatalf("Could not find 'tusk' or 'console' script to execute.")
-		}
-	}
-
-	// Construct command: php script [args]
-	cmdArgs := append([]string{script}, args...)
-
-	cmd := exec.Command(mgr.BinaryPath, cmdArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
+	if err := runFrameworkCommand(cfg, args, os.Stdin, os.Stdout, os.Stderr); err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
 			os.Exit(exitError.ExitCode())
 		}
-		log.Fatalf("Execution failed: %v", err)
+		log.Fatalf("Framework command failed: %v", err)
 	}
 }
 
