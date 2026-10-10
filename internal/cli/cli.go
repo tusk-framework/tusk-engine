@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	userdocs "github.com/tusk-framework/tusk-engine/docs"
 	"github.com/tusk-framework/tusk-engine/internal/components"
 	"github.com/tusk-framework/tusk-engine/internal/config"
 	"github.com/tusk-framework/tusk-engine/internal/control"
@@ -90,6 +91,10 @@ func Run(args []string) {
 		}
 	case "help":
 		printHelp()
+	case "docs":
+		if err := runDocs(args[2:], os.Stdout, userdocs.UserGuide, documentationVersion); err != nil {
+			log.Printf("Documentation command failed: %v", err)
+		}
 	default:
 		// 3. Check for scripts (npm-style) if not a built-in command
 		if script, ok := cfg.Scripts[command]; ok {
@@ -104,6 +109,13 @@ func Run(args []string) {
 // RunWithExitCode preserves Run's compatibility while allowing the binary to
 // report explicit setup failures to CI and shell scripts.
 func RunWithExitCode(args []string) int {
+	if len(args) >= 2 && args[1] == "docs" {
+		if err := runDocs(args[2:], os.Stdout, userdocs.UserGuide, documentationVersion); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) >= 3 && args[1] == "setup" && hasArg(args[2:], "--toolchain") {
 		cfg := config.LoadConfig()
 		return runToolchainSetupCode(cfg, args[2:], os.Stdout, os.Stderr)
@@ -123,6 +135,7 @@ func printHelp() {
 	fmt.Println("  tusk toolchain list       Show the resolved project toolchain")
 	fmt.Println("  tusk toolchain pin X@V    Pin a tool version in .tusk/toolchain.json")
 	fmt.Println("  tusk init                 Initialize a new tusk.json file")
+	fmt.Println("  tusk docs [topic]         Read the offline, version-matched user guide")
 	fmt.Println("\nPackage Management:")
 	fmt.Println("  tusk install              Install PHP dependencies")
 	fmt.Println("  tusk add <package>        Add a PHP package")
