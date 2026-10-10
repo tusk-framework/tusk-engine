@@ -75,7 +75,7 @@ func TestFrameworkCommandRunsComposerProxyWithArgumentsAndOriginalProcessContext
 	}
 }
 
-func TestResolveFrameworkCLIPrefersComposerPHPProxyToWindowsBatchWrapper(t *testing.T) {
+func TestResolveFrameworkCLIUsesComposerPHPProxyAcrossPlatforms(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "vendor", "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -90,16 +90,20 @@ func TestResolveFrameworkCLIPrefersComposerPHPProxyToWindowsBatchWrapper(t *test
 		t.Fatal(err)
 	}
 
-	resolved, err := resolveFrameworkCLI(root, "windows")
-	if err != nil {
-		t.Fatalf("resolveFrameworkCLI() error = %v", err)
-	}
 	absolutePHPProxy, err := filepath.Abs(phpProxy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved != absolutePHPProxy {
-		t.Fatalf("resolved entrypoint = %q, want Composer PHP proxy %q", resolved, absolutePHPProxy)
+	for _, platform := range []string{"linux", "darwin", "windows"} {
+		t.Run(platform, func(t *testing.T) {
+			resolved, err := resolveFrameworkCLI(root, platform)
+			if err != nil {
+				t.Fatalf("resolveFrameworkCLI() error = %v", err)
+			}
+			if resolved != absolutePHPProxy {
+				t.Fatalf("resolved entrypoint = %q, want Composer PHP proxy %q", resolved, absolutePHPProxy)
+			}
+		})
 	}
 }
 

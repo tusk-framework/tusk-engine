@@ -360,9 +360,10 @@ Everything through one command:
 
 Engine built-ins and project scripts configured in `tusk.json` or `composer.json`
 take precedence over Framework command forwarding. Run `tusk install` first so
-Composer has installed the Framework CLI. On Windows, Engine invokes Composer's
-PHP proxy directly instead of routing arguments through the generated `.bat`
-shell wrapper.
+Composer has installed the Framework CLI. Framework command forwarding uses the
+same Composer PHP proxy on Linux, macOS, and Windows. On Windows, Composer may
+also generate a `.bat` wrapper; Engine still invokes the PHP proxy directly,
+without routing arguments through a shell.
 
 ### 📋 Composer Integration
 Tusk reads the relevant `composer.json` fields, including:
