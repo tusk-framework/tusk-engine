@@ -18,6 +18,19 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Verify offline embedded CLI docs
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/tusk-docs-bin"
+          go build -o "$RUNNER_TEMP/tusk-docs-bin/tusk" ./cmd/tusk
+          index=$(env -i PATH="$RUNNER_TEMP/tusk-docs-bin" HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 \
+            "$RUNNER_TEMP/tusk-docs-bin/tusk" docs)
+          topic=$(env -i PATH="$RUNNER_TEMP/tusk-docs-bin" HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 \
+            "$RUNNER_TEMP/tusk-docs-bin/tusk" docs runtime)
+          case "$index" in *"Tusk Engine documentation (dev)"*"toolchain.md"*"upgrading.md"*) ;; *) echo "Offline docs index is incomplete" >&2; exit 1 ;; esac
+          case "$topic" in *"Application bootstrap and RoadRunner runtime"*) ;; *) echo "Offline runtime guide is unavailable" >&2; exit 1 ;; esac
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'

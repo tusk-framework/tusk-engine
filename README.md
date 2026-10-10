@@ -157,6 +157,8 @@ tusk doctor --json
 tusk toolchain list
 tusk toolchain pin php@8.3
 tusk setup --toolchain --offline
+tusk docs
+tusk docs runtime
 ```
 
 When `.tusk/toolchain.json` declares a relative executable path, the project
