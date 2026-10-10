@@ -4,6 +4,10 @@ param(
     [switch] $PrerequisitesOnly
 )
 
+function Get-FrameworkPathRepositoryVersions {
+    return @{ 'tusk-framework/framework' = 'dev-main' }
+}
+
 $ErrorActionPreference = 'Stop'
 $engineRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 if (-not $FrameworkPath) {
@@ -253,7 +257,11 @@ try {
 
     $composerFile = Join-Path $project 'composer.json'
     $composerConfig = Get-Content -Raw -LiteralPath $composerFile | ConvertFrom-Json -AsHashtable
-    $composerConfig['repositories'] = @(@{ type = 'path'; url = $framework; options = @{ symlink = $false; versions = @{ 'tusk/framework' = 'dev-main' } } })
+    $composerConfig['repositories'] = @(@{ type = 'path'; url = $framework; options = @{ symlink = $false; versions = (Get-FrameworkPathRepositoryVersions) } })
+    $frameworkVersions = $composerConfig['repositories'][0]['options']['versions']
+    if ($frameworkVersions['tusk-framework/framework'] -ne 'dev-main') {
+        throw 'Composer path repository must map tusk-framework/framework to dev-main'
+    }
     [System.IO.File]::WriteAllText($composerFile, ($composerConfig | ConvertTo-Json -Depth 20), [System.Text.UTF8Encoding]::new($false))
     Invoke-Bounded $composer @('install', '--no-interaction', '--no-progress', '--prefer-dist') $project 180 (Join-Path $scratch 'composer.log') @{ COMPOSER_ALLOW_SUPERUSER = '1' } | Out-Null
 
