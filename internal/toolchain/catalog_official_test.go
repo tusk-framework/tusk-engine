@@ -3,7 +3,9 @@ package toolchain
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"strings"
@@ -88,7 +90,7 @@ func TestOfficialCatalogVerifierRejectsNotYetValidCatalog(t *testing.T) {
 	}
 }
 
-func TestVerifyOfficialReleaseCatalogRequiresMatchingVersion(t *testing.T) {
+func TestVerifyOfficialReleaseCatalogRequiresMatchingDigest(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -99,15 +101,37 @@ func TestVerifyOfficialReleaseCatalogRequiresMatchingVersion(t *testing.T) {
 	}
 	payload := officialCatalogPayload(time.Now().UTC().Add(-time.Minute), time.Now().UTC().Add(time.Hour))
 	data := marshalSignedCatalog(t, payload, "release-key", privateKey)
+	digest := sha256.Sum256(data)
+	expectedDigest := hex.EncodeToString(digest[:])
 
-	if err := VerifyOfficialReleaseCatalog(data, verifier, "2026.10.0"); err != nil {
-		t.Fatalf("VerifyOfficialReleaseCatalog() matching version error = %v", err)
+	if err := VerifyOfficialReleaseCatalog(data, verifier, expectedDigest); err != nil {
+		t.Fatalf("VerifyOfficialReleaseCatalog() matching digest error = %v", err)
 	}
-	if err := VerifyOfficialReleaseCatalog(data, verifier, "2026.10.1"); err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("VerifyOfficialReleaseCatalog() mismatch error = %v, want version mismatch", err)
+	if err := VerifyOfficialReleaseCatalog(data, verifier, strings.Repeat("0", 64)); err == nil || !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("VerifyOfficialReleaseCatalog() mismatch error = %v, want digest mismatch", err)
+	}
+	if err := VerifyOfficialReleaseCatalog(append(data, ' '), verifier, expectedDigest); err == nil || !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("VerifyOfficialReleaseCatalog() modified-data error = %v, want digest mismatch", err)
 	}
 	if err := VerifyOfficialReleaseCatalog(data, verifier, ""); err == nil {
-		t.Fatal("VerifyOfficialReleaseCatalog() accepted empty expected release version")
+		t.Fatal("VerifyOfficialReleaseCatalog() accepted empty expected digest")
+	}
+}
+
+func TestOfficialCatalogDigestRequiresEmbeddedValue(t *testing.T) {
+	original := officialCatalogSHA256
+	t.Cleanup(func() { officialCatalogSHA256 = original })
+	officialCatalogSHA256 = ""
+	if _, err := OfficialCatalogDigest(); err == nil || !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("OfficialCatalogDigest() error = %v, want missing digest error", err)
+	}
+	officialCatalogSHA256 = strings.Repeat("a", 64)
+	if got, err := OfficialCatalogDigest(); err != nil || got != strings.Repeat("a", 64) {
+		t.Fatalf("OfficialCatalogDigest() = %q, %v; want configured digest", got, err)
+	}
+	officialCatalogSHA256 = "not-a-digest"
+	if _, err := OfficialCatalogDigest(); err == nil {
+		t.Fatal("OfficialCatalogDigest() accepted malformed digest")
 	}
 }
 
