@@ -152,11 +152,43 @@ func (v CatalogVerifier) now() time.Time {
 // It intentionally defaults to empty so development builds fail closed.
 var officialCatalogTrustAnchorsB64 string
 
+// officialCatalogSHA256 is injected by release builds with -ldflags and pins
+// the exact signed catalog asset shipped with each Engine release.
+var officialCatalogSHA256 string
+
 // OfficialCatalogVerifier constructs the fail-closed verifier used for the
 // released catalog. Public keys are configuration, never private signing
 // material, and can contain multiple IDs during key rotation overlap.
 func OfficialCatalogVerifier() (CatalogVerifier, error) {
 	return CatalogVerifierFromTrustAnchorsB64(officialCatalogTrustAnchorsB64)
+}
+
+// OfficialCatalogDigest returns the release-pinned SHA-256 of the official
+// catalog. Development builds fail closed when the value was not injected.
+func OfficialCatalogDigest() (string, error) {
+	digest, err := normalizeDigest(officialCatalogSHA256)
+	if err != nil {
+		return "", fmt.Errorf("official catalog digest is not configured or invalid: %w", err)
+	}
+	return digest, nil
+}
+
+// VerifyOfficialReleaseCatalog checks the release-pinned bytes and
+// authenticates their signature and validity before they can be cached.
+func VerifyOfficialReleaseCatalog(data []byte, verifier CatalogVerifier, expectedDigest string) error {
+	expected, err := normalizeDigest(expectedDigest)
+	if err != nil {
+		return fmt.Errorf("invalid expected official catalog digest: %w", err)
+	}
+	actualBytes := sha256.Sum256(data)
+	actual := hex.EncodeToString(actualBytes[:])
+	if actual != expected {
+		return fmt.Errorf("official catalog digest mismatch: expected %s, got %s", expected, actual)
+	}
+	if _, err := verifier.Verify(data); err != nil {
+		return fmt.Errorf("verify official release catalog: %w", err)
+	}
+	return nil
 }
 
 func LoadOfficialCatalog(path string) (CatalogPayload, error) {

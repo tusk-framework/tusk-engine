@@ -173,9 +173,25 @@ func runToolchainCommand(cfg *config.Config, args []string) {
 
 type diagnoseFunc func(*config.Config) (toolchain.Report, error)
 
-type toolchainSetupFunc func(context.Context, *config.Config, toolchain.ProvisionOptions) (toolchain.SetupReport, error)
+type toolchainSetupDependencies struct {
+	releaseVersion func() string
+	digest         func() (string, error)
+	verifier       func() (toolchain.CatalogVerifier, error)
+	fetch          func(context.Context, string) ([]byte, error)
+	provision      func(context.Context, *config.Config, toolchain.ProvisionOptions, string, toolchain.CatalogVerifier) (toolchain.SetupReport, error)
+}
 
-var provisionToolchain toolchainSetupFunc = defaultProvisionToolchain
+func defaultToolchainSetupDependencies() toolchainSetupDependencies {
+	return toolchainSetupDependencies{
+		releaseVersion: func() string { return documentationVersion },
+		digest:         toolchain.OfficialCatalogDigest,
+		verifier:       toolchain.OfficialCatalogVerifier,
+		fetch: func(ctx context.Context, version string) ([]byte, error) {
+			return toolchain.NewHTTPReleaseCatalogFetcher().Fetch(ctx, version)
+		},
+		provision: defaultProvisionVerifiedToolchain,
+	}
+}
 
 func runToolchainCommandTo(cfg *config.Config, args []string, output io.Writer, diagnose diagnoseFunc) error {
 	if len(args) == 0 || args[0] == "list" {
@@ -317,6 +333,10 @@ func parseToolchainSetupArgs(args []string) (toolchain.ProvisionOptions, error) 
 }
 
 func runToolchainSetupTo(cfg *config.Config, args []string, output io.Writer) error {
+	return runToolchainSetupToWith(cfg, args, output, defaultToolchainSetupDependencies())
+}
+
+func runToolchainSetupToWith(cfg *config.Config, args []string, output io.Writer, dependencies toolchainSetupDependencies) error {
 	options, err := parseToolchainSetupArgs(args)
 	if err != nil {
 		return err
@@ -326,10 +346,56 @@ func runToolchainSetupTo(cfg *config.Config, args []string, output io.Writer) er
 		_, _ = fmt.Fprintln(output, "Offline mode enabled; network access is disabled.")
 	}
 	catalogPath := filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain.catalog.json")
-	if _, err := os.Stat(catalogPath); err != nil {
-		return fmt.Errorf("trusted catalog is not configured at %s; update the Engine catalog before provisioning", catalogPath)
+	manifest, err := toolchain.LoadManifest(cfg.ProjectRoot)
+	if err != nil {
+		return err
 	}
-	report, err := provisionToolchain(context.Background(), cfg, options)
+	if err := manifest.Validate(); err != nil {
+		return err
+	}
+	requests, err := toolchain.SetupRequests(manifest)
+	if err != nil {
+		return err
+	}
+	if len(requests) == 0 {
+		_, err := fmt.Fprintln(output, "No pinned project-local tools require provisioning.")
+		return err
+	}
+	if dependencies.digest == nil || dependencies.verifier == nil || dependencies.provision == nil {
+		return fmt.Errorf("toolchain setup dependencies are incomplete")
+	}
+	digest, err := dependencies.digest()
+	if err != nil {
+		return fmt.Errorf("official catalog release binding unavailable: %w", err)
+	}
+	verifier, err := dependencies.verifier()
+	if err != nil {
+		return fmt.Errorf("trusted catalog verification unavailable: %w", err)
+	}
+	if options.Offline {
+		if _, err := toolchain.LoadOfficialReleaseCatalog(catalogPath, verifier, digest); err != nil {
+			return fmt.Errorf("offline trusted catalog unavailable or invalid at %s: %w", catalogPath, err)
+		}
+	} else {
+		if dependencies.releaseVersion == nil || dependencies.fetch == nil {
+			return fmt.Errorf("online toolchain setup dependencies are incomplete")
+		}
+		version, err := toolchain.NormalizeReleaseVersion(dependencies.releaseVersion())
+		if err != nil {
+			return fmt.Errorf("cannot determine stable Engine release for catalog: %w", err)
+		}
+		data, err := dependencies.fetch(context.Background(), version)
+		if err != nil {
+			return fmt.Errorf("fetch official toolchain catalog for Engine %s: %w", version, err)
+		}
+		if err := toolchain.VerifyOfficialReleaseCatalog(data, verifier, digest); err != nil {
+			return err
+		}
+		if err := toolchain.WriteCatalogAtomic(cfg.ProjectRoot, data); err != nil {
+			return fmt.Errorf("cache verified toolchain catalog: %w", err)
+		}
+	}
+	report, err := dependencies.provision(context.Background(), cfg, options, digest, verifier)
 	if err != nil {
 		return err
 	}
@@ -343,16 +409,13 @@ func runToolchainSetupTo(cfg *config.Config, args []string, output io.Writer) er
 	return err
 }
 
-func defaultProvisionToolchain(ctx context.Context, cfg *config.Config, options toolchain.ProvisionOptions) (toolchain.SetupReport, error) {
-	verifier, err := toolchain.OfficialCatalogVerifier()
-	if err != nil {
-		return toolchain.SetupReport{}, fmt.Errorf("trusted catalog verification unavailable: %w", err)
-	}
+func defaultProvisionVerifiedToolchain(ctx context.Context, cfg *config.Config, options toolchain.ProvisionOptions, digest string, verifier toolchain.CatalogVerifier) (toolchain.SetupReport, error) {
 	service := toolchain.SetupService{
-		Root:        cfg.ProjectRoot,
-		CatalogPath: filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain.catalog.json"),
-		Verifier:    verifier,
-		Downloader:  toolchain.HTTPDownloader{Timeout: 5 * time.Minute},
+		Root:                  cfg.ProjectRoot,
+		CatalogPath:           filepath.Join(cfg.ProjectRoot, ".tusk", "toolchain.catalog.json"),
+		Verifier:              verifier,
+		ExpectedCatalogSHA256: digest,
+		Downloader:            toolchain.HTTPDownloader{Timeout: 5 * time.Minute},
 	}
 	return service.Run(ctx, options)
 }
