@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed design. This document defines behavior for a future implementation;
-it does not change the current CLI or release process.
+Implemented in PR #42. The behavior becomes available to users when the PR is
+merged and a matching Engine release with its signed catalog is published.
 
 ## Context
 

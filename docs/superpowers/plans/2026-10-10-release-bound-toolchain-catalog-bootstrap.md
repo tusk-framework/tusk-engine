@@ -310,7 +310,7 @@ Run: `git diff --check`
 
 Expected: no whitespace errors.
 
-- [ ] **Step 4: Commit docs and final tests** (consolidated into implementation branch after final verification/review)
+- [x] **Step 4: Commit docs and final tests** (consolidated into implementation commit `1ced98e` after final verification/review)
 
 ```bash
 git add docs/user-guide/toolchain.md internal/cli
