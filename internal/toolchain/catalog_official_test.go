@@ -88,6 +88,29 @@ func TestOfficialCatalogVerifierRejectsNotYetValidCatalog(t *testing.T) {
 	}
 }
 
+func TestVerifyOfficialReleaseCatalogRequiresMatchingVersion(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := CatalogVerifier{
+		PublicKeys:      map[string]ed25519.PublicKey{"release-key": publicKey},
+		RequireValidity: true,
+	}
+	payload := officialCatalogPayload(time.Now().UTC().Add(-time.Minute), time.Now().UTC().Add(time.Hour))
+	data := marshalSignedCatalog(t, payload, "release-key", privateKey)
+
+	if err := VerifyOfficialReleaseCatalog(data, verifier, "2026.10.0"); err != nil {
+		t.Fatalf("VerifyOfficialReleaseCatalog() matching version error = %v", err)
+	}
+	if err := VerifyOfficialReleaseCatalog(data, verifier, "2026.10.1"); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("VerifyOfficialReleaseCatalog() mismatch error = %v, want version mismatch", err)
+	}
+	if err := VerifyOfficialReleaseCatalog(data, verifier, ""); err == nil {
+		t.Fatal("VerifyOfficialReleaseCatalog() accepted empty expected release version")
+	}
+}
+
 func TestLoadOfficialCatalogRejectsUnsignedLocalCatalog(t *testing.T) {
 	setOfficialCatalogTrustAnchors(t, "catalog-2026", make(ed25519.PublicKey, ed25519.PublicKeySize))
 	path := t.TempDir() + string(os.PathSeparator) + "catalog.json"

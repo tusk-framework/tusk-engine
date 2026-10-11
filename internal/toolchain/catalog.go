@@ -159,6 +159,27 @@ func OfficialCatalogVerifier() (CatalogVerifier, error) {
 	return CatalogVerifierFromTrustAnchorsB64(officialCatalogTrustAnchorsB64)
 }
 
+// VerifyOfficialReleaseCatalog authenticates catalog bytes and binds the
+// signed catalog version to the stable Engine release expected by the caller.
+func VerifyOfficialReleaseCatalog(data []byte, verifier CatalogVerifier, expectedVersion string) error {
+	expected, err := NormalizeReleaseVersion(expectedVersion)
+	if err != nil {
+		return fmt.Errorf("invalid Engine release version: %w", err)
+	}
+	payload, err := verifier.Verify(data)
+	if err != nil {
+		return err
+	}
+	actual, err := NormalizeReleaseVersion(payload.CatalogVersion)
+	if err != nil {
+		return fmt.Errorf("catalog release version is invalid: %w", err)
+	}
+	if actual != expected {
+		return fmt.Errorf("catalog version %q does not match Engine release %q", actual, expected)
+	}
+	return nil
+}
+
 func LoadOfficialCatalog(path string) (CatalogPayload, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
