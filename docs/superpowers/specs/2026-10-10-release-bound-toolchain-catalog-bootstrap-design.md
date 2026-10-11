@@ -89,10 +89,14 @@ supported by a future design) must not guess a release or silently use the
 latest catalog. It should fail with guidance to install a released Engine or
 configure a trusted catalog through the documented development path.
 
-The fetched catalog's signed `catalog_version` must equal the running
-Engine's normalized release version. A correctly signed catalog from a
-different release is rejected. This binds the available artifact inventory to
-the trust anchors and compatibility expectations shipped with that Engine.
+The release pipeline computes the SHA-256 digest of the signed catalog after
+signing and injects that digest into every Engine binary built for the same
+tag. The binary therefore carries both the public signing anchors and the
+expected digest for its exact catalog asset. `catalog_version` remains the
+catalog inventory's own version; it is not the Engine release version and
+must not be compared to it. This distinction preserves the existing catalog
+versioning scheme while binding each Engine build to the exact signed catalog
+published with its tag.
 
 ## Online setup behavior
 
@@ -105,15 +109,19 @@ the trust anchors and compatibility expectations shipped with that Engine.
    only the canonical GitHub release URL and the documented HTTPS redirect
    destinations needed for GitHub release assets; reject downgrade to HTTP,
    unexpected hosts, and redirect loops.
-5. Verify the complete catalog using `OfficialCatalogVerifier`, including its
-   signature, validity window, supported schema, artifact signatures, and
-   release-version match.
+5. Verify the fetched bytes' SHA-256 against the digest embedded in this Engine
+   build, then verify the complete catalog using `OfficialCatalogVerifier`,
+   including its signature, validity window, supported schema, and artifact
+   signatures.
 6. Persist the verified bytes atomically to
    `.tusk/toolchain.catalog.json`. Never truncate or replace the existing file
    before every check succeeds.
 7. Run the existing setup service, which independently loads/verifies the
-   catalog and provisions the explicitly pinned artifacts. Artifact download
-   digests/signatures and manifest atomicity remain enforced as today.
+   catalog against the same required release digest and trust anchors before
+   provisioning the explicitly pinned artifacts. Artifact download
+   digests/signatures and manifest atomicity remain enforced as today. The
+   setup service must fail closed if the expected release digest is absent or
+   malformed; signature-only verification is not sufficient for provisioning.
 
 If catalog acquisition or validation fails, setup stops before artifact
 provisioning and reports an actionable error. An online attempt must not
@@ -124,17 +132,20 @@ cache-only behavior must select `--offline`.
 
 With `--offline`, catalog resolution must not create an HTTP client, perform
 DNS, contact GitHub, or follow any URL. The Engine loads the project-local
-catalog, verifies it with the embedded anchors and validity rules, checks its
-release version, and proceeds only if verified catalog data and required
-artifacts are already available locally. If the catalog is missing, expired,
-invalid, or for another Engine release, fail with a message explaining how to
-run online setup with the matching Engine release. Do not replace or repair
-the offline cache from the network.
+catalog, checks its bytes against the digest embedded in this Engine build,
+verifies it with the embedded anchors and validity rules, and proceeds only
+if the exact release catalog and required artifacts are already available
+locally. If the catalog is missing, expired, invalid, or has another digest,
+fail with a message explaining how to run online setup with the matching
+Engine release. Do not replace or repair the offline cache from the network.
 
 ## Trust, storage, and failure safety
 
 - The trust root remains the public Ed25519 anchors embedded in official
   Engine releases. Downloading a catalog never makes it trusted by itself.
+- Official release binaries also embed the SHA-256 digest of their exact
+  signed catalog asset; release setup checks this digest in online and offline
+  modes. `catalog_version` is independent metadata and is not an Engine tag.
 - Catalog signature and validity checks happen before the downloaded bytes
   become the project cache or influence artifact selection.
 - Enforce a small explicit maximum catalog size and a finite request timeout;
@@ -152,8 +163,8 @@ the offline cache from the network.
 
 The `tusk setup --toolchain` command and `--offline` flag remain unchanged.
 Existing projects with a verified catalog continue to work offline while that
-catalog remains valid and matches the Engine release. Projects do not need to
-commit catalog bytes or downloaded tools.
+catalog remains valid and its bytes match the Engine release's embedded
+digest. Projects do not need to commit catalog bytes or downloaded tools.
 
 Errors should distinguish at least:
 
@@ -161,8 +172,8 @@ Errors should distinguish at least:
 - development/snapshot Engine with no release catalog identity;
 - missing embedded official trust anchors;
 - release asset unavailable or network/timeout/size failure;
-- invalid signature, invalid validity window, expired catalog, or version
-  mismatch;
+- invalid signature, invalid validity window, expired catalog, or catalog
+  digest mismatch;
 - offline mode with missing/invalid catalog or missing cached artifact; and
 - pinned version/platform absent from the authenticated catalog.
 
@@ -178,7 +189,8 @@ Automated tests should cover:
 - online acquisition for a pinned request and no request for an empty set of
   pins;
 - offline mode making zero network calls;
-- signed matching catalog acceptance and signed wrong-version rejection;
+- signed catalog acceptance and rejection of mismatched catalog digests;
+- missing embedded digest rejection;
 - missing anchors, invalid signature, expired catalog, malformed/oversized
   response, non-HTTPS redirect, unexpected redirect host, timeout, and 404;
 - atomic cache replacement only after verification, preserving an existing
@@ -200,10 +212,13 @@ Engine's Go test, vet, build, and diff checks, plus the CI suite.
    and skeleton documentation update.
 3. Implement Engine behavior with tests and keep the online and offline
    semantics above explicit in the user guide.
-4. Update the skeleton's quickstart to pin RoadRunner and run setup, while
+4. Update the release workflow and GoReleaser configuration to calculate the
+   signed catalog digest and embed it in the binaries before publishing the
+   matching catalog asset.
+5. Update the skeleton's quickstart to pin RoadRunner and run setup, while
    clearly stating that project creation still needs PHP and Composer under
    the currently supported installation path.
-5. Release a new Engine version with matching signed catalog assets before
+6. Release a new Engine version with matching signed catalog assets before
    advertising catalog auto-bootstrap as available.
 
 ## Alternatives considered
@@ -214,6 +229,11 @@ Engine's Go test, vet, build, and diff checks, plus the CI suite.
 - **Always use the newest catalog:** rejected because it breaks release
   reproducibility and can exceed the trust/compatibility policy of an older
   Engine binary.
+- **Compare `catalog_version` to the Engine tag:** rejected because the
+  published `v0.3.2` catalog has `catalog_version` `2026.10.0`; that field is
+  the catalog inventory version, not the Engine release. The binary-embedded
+  catalog digest provides an exact release binding without changing this
+  established meaning.
 - **Embed the full catalog in every Engine binary:** rejected because the
   signed release asset already exists, may evolve on its own release cadence,
   and should remain independently inspectable and replaceable through a new

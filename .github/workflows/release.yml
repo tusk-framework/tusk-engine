@@ -63,6 +63,13 @@ jobs:
         with:
           subject-path: release/toolchain-catalog.provenance.json
 
+      - name: Bind signed catalog digest to release binaries
+        shell: bash
+        run: |
+          digest="$(sha256sum release/toolchain-catalog.json | cut -d ' ' -f 1)"
+          [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+          echo "TUSK_CATALOG_SHA256=$digest" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -72,3 +79,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+          TUSK_CATALOG_SHA256: ${{ env.TUSK_CATALOG_SHA256 }}

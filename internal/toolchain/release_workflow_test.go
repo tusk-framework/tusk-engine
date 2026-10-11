@@ -97,6 +97,24 @@ func TestReleaseDocumentationCoversSecretHandlingRotationAndRevocation(t *testin
 	}
 }
 
+func TestReleaseWorkflowBindsSignedCatalogDigestIntoBinaries(t *testing.T) {
+	root := repositoryRoot(t)
+	workflowText := readRepositoryFile(t, root, ".github", "workflows", "release.yml")
+	compute := strings.Index(workflowText, "sha256sum release/toolchain-catalog.json")
+	release := strings.Index(workflowText, "Run GoReleaser")
+	if compute < 0 || release < 0 || compute > release {
+		t.Fatal("release workflow must compute the signed catalog digest before GoReleaser")
+	}
+	if !strings.Contains(workflowText, "TUSK_CATALOG_SHA256=$digest") || !strings.Contains(workflowText, "[[ \"$digest\" =~ ^[a-f0-9]{64}$ ]]") {
+		t.Fatal("release workflow must validate and export the lowercase SHA-256 digest")
+	}
+
+	goreleaser := readRepositoryFile(t, root, ".goreleaser.yaml")
+	if !strings.Contains(string(goreleaser), "toolchain.officialCatalogSHA256={{ .Env.TUSK_CATALOG_SHA256 }}") {
+		t.Fatal("GoReleaser must embed the official catalog digest in release binaries")
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

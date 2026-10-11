@@ -22,6 +22,7 @@ builds:
         -s -w
         -X github.com/tusk-framework/tusk-engine/internal/cli.documentationVersion={{ .Version }}
         -X github.com/tusk-framework/tusk-engine/internal/toolchain.officialCatalogTrustAnchorsB64={{ .Env.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+        -X github.com/tusk-framework/tusk-engine/internal/toolchain.officialCatalogSHA256={{ .Env.TUSK_CATALOG_SHA256 }}
 
 archives:
   - format: tar.gz

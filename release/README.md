@@ -93,6 +93,15 @@ with identical payload bytes and key material produces identical signed bytes;
 the provenance file deterministically records the payload digest, signed
 catalog digest, and key ID.
 
+The release workflow computes SHA-256 from the final signed
+`release/toolchain-catalog.json` and injects that exact digest into every
+Engine binary. `catalog_version` remains catalog inventory metadata; it is
+not required to equal the Engine release version. Online setup downloads the
+catalog asset for the exact Engine tag and requires both the embedded digest
+and signature to match before caching it. Offline setup applies the same checks
+to the cached bytes. Changing a catalog therefore requires a matching Engine
+build, even when the catalog's own version string follows a different cadence.
+
 The shell values above are secret references/placeholders, not key material.
 Never replace them with a committed key file, command-line private key, or
 real secret in documentation, tests, or workflow YAML.

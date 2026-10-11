@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -30,12 +32,13 @@ func TestSetupServiceProvisionsPinnedToolsAndPersistsManagedPaths(t *testing.T) 
 	downloader := &fixtureDownloader{dataByURL: dataByURL}
 
 	service := SetupService{
-		Root:        root,
-		CatalogPath: catalogPath,
-		Verifier:    CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
-		Downloader:  downloader,
-		GOOS:        runtime.GOOS,
-		GOARCH:      runtime.GOARCH,
+		Root:                  root,
+		CatalogPath:           catalogPath,
+		Verifier:              CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
+		ExpectedCatalogSHA256: setupCatalogDigest(t, catalogPath),
+		Downloader:            downloader,
+		GOOS:                  runtime.GOOS,
+		GOARCH:                runtime.GOARCH,
 	}
 
 	report, err := service.Run(context.Background(), ProvisionOptions{MaxArtifactBytes: 1024})
@@ -70,6 +73,41 @@ func TestSetupServiceProvisionsPinnedToolsAndPersistsManagedPaths(t *testing.T) 
 	}
 }
 
+func TestSetupRequestsOnlyIncludesPinnedToolsWithoutExplicitPaths(t *testing.T) {
+	requests, err := SetupRequests(Manifest{
+		Profile:    ProfileProjectLocal,
+		PHP:        ToolSpec{Version: "8.3"},
+		Composer:   ToolSpec{Version: "2.8", Path: "tools/composer"},
+		RoadRunner: ToolSpec{Path: "tools/rr"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0] != (ToolRequest{Name: PHP, Version: "8.3"}) {
+		t.Fatalf("SetupRequests() = %#v, want only pinned PHP", requests)
+	}
+}
+
+func TestSetupRequestsRejectsUnpinnedCIAndDockerProfiles(t *testing.T) {
+	if _, err := SetupRequests(Manifest{Profile: ProfileCI}); err == nil || !strings.Contains(err.Error(), "unpinned") {
+		t.Fatalf("SetupRequests(CI) error = %v, want unpinned tool error", err)
+	}
+	if _, err := SetupRequests(Manifest{Profile: ProfileDocker}); err == nil || !strings.Contains(err.Error(), "docker profile") {
+		t.Fatalf("SetupRequests(Docker) error = %v, want host provisioning rejection", err)
+	}
+}
+
+func TestLoadOfficialReleaseCatalogRejectsDigestMismatch(t *testing.T) {
+	root := t.TempDir()
+	publicKey, privateKey := setupKeyPair(t)
+	artifacts, _ := setupArtifacts(runtime.GOOS, runtime.GOARCH)
+	path := writeSignedSetupCatalog(t, root, artifacts, privateKey)
+	verifier := CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}}
+	if _, err := LoadOfficialReleaseCatalog(path, verifier, strings.Repeat("0", 64)); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("LoadOfficialReleaseCatalog() error = %v, want digest mismatch", err)
+	}
+}
+
 func TestSetupServiceOfflineUsesVerifiedCacheWithoutDownloading(t *testing.T) {
 	root := t.TempDir()
 	manifest := Manifest{Profile: ProfileProjectLocal, PHP: ToolSpec{Version: "8.3.0"}}
@@ -87,13 +125,14 @@ func TestSetupServiceOfflineUsesVerifiedCacheWithoutDownloading(t *testing.T) {
 	downloader := &fixtureDownloader{err: errors.New("network must not be used")}
 
 	service := SetupService{
-		Root:        root,
-		CatalogPath: catalogPath,
-		Verifier:    CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
-		Downloader:  downloader,
-		Cache:       cache,
-		GOOS:        runtime.GOOS,
-		GOARCH:      runtime.GOARCH,
+		Root:                  root,
+		CatalogPath:           catalogPath,
+		Verifier:              CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
+		ExpectedCatalogSHA256: setupCatalogDigest(t, catalogPath),
+		Downloader:            downloader,
+		Cache:                 cache,
+		GOOS:                  runtime.GOOS,
+		GOARCH:                runtime.GOARCH,
 	}
 	report, err := service.Run(context.Background(), ProvisionOptions{Offline: true, MaxArtifactBytes: 1024})
 	if err != nil {
@@ -118,9 +157,11 @@ func TestSetupServicePropagatesPlatformVariantToProvisioning(t *testing.T) {
 	catalogPath := writeSignedSetupCatalog(t, root, artifacts, privateKey)
 
 	service := SetupService{
-		Root: root, CatalogPath: catalogPath,
-		Verifier:   CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
-		Downloader: &fixtureDownloader{dataByURL: dataByURL}, GOOS: "linux", GOARCH: "amd64",
+		Root:                  root,
+		CatalogPath:           catalogPath,
+		Verifier:              CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
+		ExpectedCatalogSHA256: setupCatalogDigest(t, catalogPath),
+		Downloader:            &fixtureDownloader{dataByURL: dataByURL}, GOOS: "linux", GOARCH: "amd64",
 	}
 	report, err := service.Run(context.Background(), ProvisionOptions{MaxArtifactBytes: 1024})
 	if err != nil {
@@ -143,12 +184,13 @@ func TestSetupServiceRejectsUntrustedCatalogBeforeProvisioning(t *testing.T) {
 	downloader := &fixtureDownloader{data: []byte("must not download")}
 
 	service := SetupService{
-		Root:        root,
-		CatalogPath: catalogPath,
-		Verifier:    CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": make(ed25519.PublicKey, ed25519.PublicKeySize)}},
-		Downloader:  downloader,
-		GOOS:        runtime.GOOS,
-		GOARCH:      runtime.GOARCH,
+		Root:                  root,
+		CatalogPath:           catalogPath,
+		Verifier:              CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": make(ed25519.PublicKey, ed25519.PublicKeySize)}},
+		ExpectedCatalogSHA256: setupCatalogDigest(t, catalogPath),
+		Downloader:            downloader,
+		GOOS:                  runtime.GOOS,
+		GOARCH:                runtime.GOARCH,
 	}
 	_, err := service.Run(context.Background(), ProvisionOptions{})
 	if err == nil || !strings.Contains(err.Error(), "signature") {
@@ -162,6 +204,26 @@ func TestSetupServiceRejectsUntrustedCatalogBeforeProvisioning(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(root, ".tusk", "cache")); !os.IsNotExist(statErr) {
 		t.Fatalf("cache directory exists after catalog rejection: %v", statErr)
+	}
+}
+
+func TestSetupServiceRequiresValidReleaseDigest(t *testing.T) {
+	root := t.TempDir()
+	writeSetupManifest(t, root, Manifest{Profile: ProfileProjectLocal, PHP: ToolSpec{Version: "8.3.0"}})
+	publicKey, privateKey := setupKeyPair(t)
+	artifacts, _ := setupArtifacts(runtime.GOOS, runtime.GOARCH)
+	catalogPath := writeSignedSetupCatalog(t, root, artifacts[:1], privateKey)
+	for _, digest := range []string{"", "not-a-digest"} {
+		service := SetupService{
+			Root: root, CatalogPath: catalogPath,
+			Verifier:              CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
+			ExpectedCatalogSHA256: digest,
+			Downloader:            &fixtureDownloader{err: errors.New("must not provision")},
+			GOOS:                  runtime.GOOS, GOARCH: runtime.GOARCH,
+		}
+		if _, err := service.Run(context.Background(), ProvisionOptions{}); err == nil || !strings.Contains(err.Error(), "expected official catalog digest") {
+			t.Errorf("SetupService.Run(digest=%q) error = %v, want fail-closed digest error", digest, err)
+		}
 	}
 }
 
@@ -183,12 +245,13 @@ func TestSetupServiceDoesNotPersistPartialProvisioning(t *testing.T) {
 	downloader := &fixtureDownloader{dataByURL: dataByURL}
 
 	service := SetupService{
-		Root:        root,
-		CatalogPath: catalogPath,
-		Verifier:    CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
-		Downloader:  downloader,
-		GOOS:        runtime.GOOS,
-		GOARCH:      runtime.GOARCH,
+		Root:                  root,
+		CatalogPath:           catalogPath,
+		Verifier:              CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
+		ExpectedCatalogSHA256: setupCatalogDigest(t, catalogPath),
+		Downloader:            downloader,
+		GOOS:                  runtime.GOOS,
+		GOARCH:                runtime.GOARCH,
 	}
 	report, err := service.Run(context.Background(), ProvisionOptions{MaxArtifactBytes: 1024})
 	if err == nil || report.Provision.Ready {
@@ -215,12 +278,13 @@ func TestSetupServicePreservesExplicitToolPaths(t *testing.T) {
 	catalogPath := writeSignedSetupCatalog(t, root, artifacts[:1], privateKey)
 
 	service := SetupService{
-		Root:        root,
-		CatalogPath: catalogPath,
-		Verifier:    CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
-		Downloader:  &fixtureDownloader{err: errors.New("must not download")},
-		GOOS:        runtime.GOOS,
-		GOARCH:      runtime.GOARCH,
+		Root:                  root,
+		CatalogPath:           catalogPath,
+		Verifier:              CatalogVerifier{PublicKeys: map[string]ed25519.PublicKey{"test-key": publicKey}},
+		ExpectedCatalogSHA256: setupCatalogDigest(t, catalogPath),
+		Downloader:            &fixtureDownloader{err: errors.New("must not download")},
+		GOOS:                  runtime.GOOS,
+		GOARCH:                runtime.GOARCH,
 	}
 	if _, err := service.Run(context.Background(), ProvisionOptions{Offline: true}); err != nil {
 		t.Fatalf("SetupService.Run() error = %v", err)
@@ -305,6 +369,16 @@ func writeSignedSetupCatalog(t *testing.T, root string, artifacts []Artifact, pr
 		t.Fatal(err)
 	}
 	return path
+}
+
+func setupCatalogDigest(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
 }
 
 func writeSetupManifest(t *testing.T, root string, manifest Manifest) {

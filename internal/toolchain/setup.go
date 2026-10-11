@@ -27,6 +27,22 @@ func LoadCatalog(path string, verifier CatalogVerifier) (CatalogPayload, error) 
 	return payload, nil
 }
 
+// LoadOfficialReleaseCatalog reads and validates the exact catalog bound to an
+// Engine release before returning it to a provisioner.
+func LoadOfficialReleaseCatalog(path string, verifier CatalogVerifier, expectedDigest string) (CatalogPayload, error) {
+	if strings.TrimSpace(path) == "" {
+		return CatalogPayload{}, errors.New("catalog path is required")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return CatalogPayload{}, fmt.Errorf("read toolchain catalog: %w", err)
+	}
+	if err := VerifyOfficialReleaseCatalog(data, verifier, expectedDigest); err != nil {
+		return CatalogPayload{}, err
+	}
+	return verifier.Verify(data)
+}
+
 // SetupReport contains the independent provisioning outcomes and the manifest
 // used for the run. The manifest is only updated after all requested tools
 // have been installed successfully.
@@ -37,14 +53,15 @@ type SetupReport struct {
 
 // SetupService performs explicit project-local toolchain setup.
 type SetupService struct {
-	Root        string
-	CatalogPath string
-	Verifier    CatalogVerifier
-	Downloader  Downloader
-	Cache       ArtifactCache
-	Installer   Installer
-	GOOS        string
-	GOARCH      string
+	Root                  string
+	CatalogPath           string
+	Verifier              CatalogVerifier
+	ExpectedCatalogSHA256 string
+	Downloader            Downloader
+	Cache                 ArtifactCache
+	Installer             Installer
+	GOOS                  string
+	GOARCH                string
 }
 
 // Run loads a verified catalog, provisions only pinned tools without explicit
@@ -62,7 +79,7 @@ func (s SetupService) Run(ctx context.Context, options ProvisionOptions) (SetupR
 	if err := manifest.Validate(); err != nil {
 		return SetupReport{}, err
 	}
-	requests, err := setupRequests(manifest)
+	requests, err := SetupRequests(manifest)
 	if err != nil {
 		return SetupReport{}, err
 	}
@@ -78,7 +95,7 @@ func (s SetupService) Run(ctx context.Context, options ProvisionOptions) (SetupR
 	if catalogPath == "" {
 		catalogPath = filepath.Join(root, ".tusk", "toolchain.catalog.json")
 	}
-	catalog, err := LoadCatalog(catalogPath, s.Verifier)
+	catalog, err := LoadOfficialReleaseCatalog(catalogPath, s.Verifier, s.ExpectedCatalogSHA256)
 	if err != nil {
 		return SetupReport{}, err
 	}
@@ -142,7 +159,8 @@ func (s SetupService) Run(ctx context.Context, options ProvisionOptions) (SetupR
 	return SetupReport{Manifest: updated, Provision: provision}, nil
 }
 
-func setupRequests(manifest Manifest) ([]ToolRequest, error) {
+// SetupRequests returns the tools setup may provision based on explicit pins.
+func SetupRequests(manifest Manifest) ([]ToolRequest, error) {
 	if manifest.EffectiveProfile() == ProfileDocker {
 		return nil, errors.New("docker profile does not install host toolchains; configure container tools instead")
 	}
