@@ -86,7 +86,7 @@
 - [ ] **Step 2: Run focused Go tests** and confirm new validation tests fail before implementation.
 - [ ] **Step 3: Implement `release.ValidateConventionalCommit`** with the pinned parser and expose `tusk-release validate-message --message <title>`; add CLI and package tests.
 - [ ] **Step 4: Add `pr-title.yml`** triggered on opened/edited/synchronize/reopened pull requests. Pass title through an environment variable (never interpolate untrusted title into a shell script) and validate with the Go CLI; grant read-only permissions.
-- [ ] **Step 5: Split Docker validation from image publication**: create a read-only `Docker validation` workflow and leave mutable `main` image publication in `docker-publish.yml`, so image push outcome cannot affect the release validation workflow conclusion.
+- [ ] **Step 5: Split Docker validation from image publication**: create a read-only `Docker validation` workflow and make `docker-publish.yml` callable only as a reusable workflow (no direct `push` trigger); Task 5 calls it only after the aggregator verifies every required check, so image publication cannot run on an unvalidated main commit or affect the validation workflow conclusion.
 - [ ] **Step 6: Set stable workflow names** `Go`, `Docker validation`, and `Skeleton smoke`; make missing smoke prerequisites fail rather than silently skip required checks.
 - [ ] **Step 7: Verify workflow syntax and Go tests**; document required check names and the title/mixed-merge contract.
 - [ ] **Step 8: Commit** as `ci: validate conventional pull request titles and release gates`.
@@ -119,7 +119,7 @@
 
 **Interfaces:**
 - Consumes: `workflow_run` events and API results proving successful required Go, Docker validation, and Skeleton smoke runs for one immutable main SHA; Task 2 CLI output; Task 4 local composite publisher.
-- Produces: at most one immutable `vMAJOR.MINOR.PATCH` tag and matching GitHub release for that validated SHA; versioned Docker image only for a published release commit.
+- Produces: at most one immutable `vMAJOR.MINOR.PATCH` tag and matching GitHub release for that validated SHA; mutable `main` image and optional versioned Docker image only after all required checks succeed for the same SHA.
 
 - [ ] **Step 1: Add orchestration contract tests/scripts** for no release, successful release, `main` advancing while queued, tag collision, already-complete release, and retry after partial publication.
 - [ ] **Step 2: Run those tests** and confirm the stale-SHA/tag-race cases fail before workflow implementation.
@@ -128,8 +128,9 @@
 - [ ] **Step 5: Create an annotated version tag at the exact tested SHA** and call the shared publisher within the same workflow run, without relying on tag push to trigger Actions.
 - [ ] **Step 6: Implement retry rules**: same tag + same SHA + incomplete release can resume idempotently; completed releases exit successfully; different SHA or conflicting assets fail without mutation.
 - [ ] **Step 7: Publish Docker image tag `v<version>` from the same validated SHA** after version calculation; preserve mutable `main` image behavior separately and prevent it from satisfying validation dependencies.
-- [ ] **Step 8: Validate action graph/YAML and run all Go tests**; assert each acceptance criterion has a corresponding workflow/test check.
-- [ ] **Step 9: Commit** as `feat: publish engine releases after successful main checks`.
+- [ ] **Step 8: Call the reusable Docker publisher only after all required validation succeeds**, publishing `main` even when semantic version calculation reports no release, and publishing both `main` and `v<version>` when a release is due.
+- [ ] **Step 9: Validate action graph/YAML and run all Go tests**; assert each acceptance criterion has a corresponding workflow/test check.
+- [ ] **Step 10: Commit** as `feat: publish engine releases after successful main checks`.
 
 ### Task 6: Documentation and end-to-end release verification
 
