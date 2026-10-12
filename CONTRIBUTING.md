@@ -99,6 +99,15 @@ release versioning:
 - `docs:`, `test:`, `chore:`, and similar non-release commits do not create a
   release by themselves.
 
+Pull request titles are validated as Conventional Commits. When a pull request
+is squash-merged, its validated title becomes the commit message used for
+release calculation. With a regular merge commit, every included non-merge
+commit must have a valid Conventional Commit message; the release calculator
+ignores the synthetic merge wrapper and evaluates those individual commits.
+Mark a breaking change with `!` before the colon (for example,
+`feat(api)!: replace the public API`) or include a non-empty `BREAKING CHANGE:`
+footer in the commit body.
+
 Use an imperative, specific subject, for example:
 
 ```text
