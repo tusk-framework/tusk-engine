@@ -95,17 +95,17 @@
 
 **Files:**
 - Modify: `.github/workflows/release.yml`
-- Create: `.github/workflows/publish-release.yml` (reusable workflow)
+- Create: `.github/actions/publish-release/action.yml` (local composite action)
 - Modify: `.goreleaser.yaml`
 
 **Interfaces:**
-- Produces: shared publication implementation accepting an immutable version tag and expected source SHA, validating both, then running the existing signed catalog and GoReleaser sequence exactly once. If implemented as a reusable workflow, it is invoked as a job, never as a step.
-- Consumes: tag/version and SHA from either the automatic main orchestrator or an explicitly supported manual stable-tag invocation.
+- Produces: shared composite publication action accepting an immutable version tag and expected source SHA, validating both, then running the existing signed catalog and GoReleaser sequence exactly once.
+- Consumes: tag/version and SHA from either the automatic main orchestrator or an explicitly supported manual stable-tag invocation; signing credentials are passed only through caller step environment and never as logged inputs.
 
 - [ ] **Step 1: Capture existing release contract** in checks for signed catalog, provenance, checksums, attestations, and exact binary version/digest.
 - [ ] **Step 2: Run current release validation tests/checks** to establish the baseline and inspect GoReleaser config behavior for exact tags.
-- [ ] **Step 3: Extract the current signed release steps** into a reusable workflow with least-privilege permissions, explicit tool versions, stable-tag validation, and expected-SHA verification.
-- [ ] **Step 4: Keep tag-triggered compatibility/manual publishing** as a thin caller of the reusable workflow, rejecting non-stable tags and never moving tags.
+- [ ] **Step 3: Extract the current signed release steps** into a local composite action with stable-tag validation, expected-SHA verification, Go 1.23, and pinned GoReleaser CLI v2.18.3/action v7.2.3 (`f06c13b6b1a9625abc9e6e439d9c05a8f2190e94`).
+- [ ] **Step 4: Keep tag-triggered compatibility/manual publishing** as a thin caller of the composite action, rejecting non-stable tags and never moving tags; scope token/OIDC/attestation permissions to the caller's publication job.
 - [ ] **Step 5: Add workflow-level validation** that missing signing inputs, invalid payload, mismatched SHA, or wrong tag fail before publication.
 - [ ] **Step 6: Validate workflow YAML and GoReleaser configuration**; confirm existing release assets and trust chain are preserved.
 - [ ] **Step 7: Commit** as `refactor: share exact-tag signed release publication`.
@@ -118,7 +118,7 @@
 - Modify: `.github/workflows/publish-release.yml`
 
 **Interfaces:**
-- Consumes: `workflow_run` events and API results proving successful required Go, Docker validation, and Skeleton smoke runs for one immutable main SHA; Task 2 CLI output; Task 4 shared publisher.
+- Consumes: `workflow_run` events and API results proving successful required Go, Docker validation, and Skeleton smoke runs for one immutable main SHA; Task 2 CLI output; Task 4 local composite publisher.
 - Produces: at most one immutable `vMAJOR.MINOR.PATCH` tag and matching GitHub release for that validated SHA; versioned Docker image only for a published release commit.
 
 - [ ] **Step 1: Add orchestration contract tests/scripts** for no release, successful release, `main` advancing while queued, tag collision, already-complete release, and retry after partial publication.
