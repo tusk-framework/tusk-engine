@@ -136,6 +136,10 @@ need it; it must never be printed or persisted as an artifact.
   failed and must not report a successful release. The immutable tag may
   remain; documented retry behavior must resume or safely recreate the GitHub
   release for the same tag without changing its target commit.
+- For an incomplete draft release, retry the same tag/SHA by reusing the draft
+  and replacing only same-named partial assets; never replace or mutate an
+  already-published release. Fail preflight before building when the tag is
+  already published or publication permissions are unavailable.
 - A commit that has already been released must not create another version if
   the workflow is rerun.
 
