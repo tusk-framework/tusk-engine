@@ -107,6 +107,22 @@ func parseMessage(message string) (conventionalcommits.Message, error) {
 	return machine.Parse([]byte(message))
 }
 
+// ValidateConventionalCommit validates a complete Conventional Commit message
+// using the same pinned parser as release calculation.
+func ValidateConventionalCommit(message string) error {
+	if breakingMetadata.MatchString(message) && !validBreakingMetadata.MatchString(message) {
+		return fmt.Errorf("invalid Conventional Commit message %q: BREAKING CHANGE footer must have a value", message)
+	}
+	parsed, err := parseMessage(message)
+	if err != nil {
+		return fmt.Errorf("invalid Conventional Commit message %q: %w", message, err)
+	}
+	if _, ok := parsed.(*conventionalcommits.ConventionalCommit); !ok {
+		return fmt.Errorf("invalid Conventional Commit message %q", message)
+	}
+	return nil
+}
+
 func hasReleaseRelevantHeader(message string) bool {
 	header := strings.SplitN(message, "\n", 2)[0]
 	header = strings.TrimSpace(header)

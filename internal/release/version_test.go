@@ -150,3 +150,28 @@ func TestCalculateNextVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateConventionalCommit(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		wantErr bool
+	}{
+		{name: "feat", message: "feat: add widget"},
+		{name: "fix", message: "fix(api): handle nil input"},
+		{name: "perf", message: "perf: improve startup"},
+		{name: "arbitrary type", message: "docs: update guide"},
+		{name: "breaking bang", message: "refactor!: replace public API"},
+		{name: "breaking footer", message: "docs: remove old guide\n\nBREAKING CHANGE: old guide URL is no longer supported"},
+		{name: "malformed title", message: "feat add widget", wantErr: true},
+		{name: "invalid utf8", message: "fix: repair\xff", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConventionalCommit(tt.message)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateConventionalCommit() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
+	}
+}

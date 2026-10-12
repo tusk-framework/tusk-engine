@@ -27,6 +27,22 @@ func main() {
 }
 
 func run(args []string, stdout io.Writer, git gitRunner) error {
+	if len(args) > 0 && args[0] == "validate-message" {
+		flags := flag.NewFlagSet("validate-message", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		message := flags.String("message", "", "Conventional Commit message to validate")
+		if err := flags.Parse(args[1:]); err != nil {
+			return fmt.Errorf("invalid arguments: %w", err)
+		}
+		if flags.NArg() != 0 {
+			return errors.New("unexpected positional arguments")
+		}
+		if *message == "" {
+			return errors.New("missing required --message")
+		}
+		return release.ValidateConventionalCommit(*message)
+	}
+
 	flags := flag.NewFlagSet("tusk-release", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	previousTag := flags.String("previous-tag", "", "previous stable release tag")

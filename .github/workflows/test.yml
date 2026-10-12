@@ -38,7 +38,6 @@ jobs:
           tools: composer:v2
 
       - name: Check smoke prerequisites
-        id: prerequisites
         shell: bash
         run: |
           missing=()
@@ -46,14 +45,11 @@ jobs:
             command -v "$tool" >/dev/null || missing+=("$tool")
           done
           if (( ${#missing[@]} )); then
-            echo 'available=false' >> "$GITHUB_OUTPUT"
-            echo "SKIP skeleton smoke: missing prerequisites: ${missing[*]}"
-          else
-            echo 'available=true' >> "$GITHUB_OUTPUT"
+            echo "ERROR: missing required skeleton smoke prerequisites: ${missing[*]}" >&2
+            exit 1
           fi
 
       - name: Check out coordinated modern Framework and install dependencies
-        if: steps.prerequisites.outputs.available == 'true'
         shell: bash
         run: |
           git clone --no-checkout https://github.com/tusk-framework/tusk-framework.git "$RUNNER_TEMP/tusk-framework"
@@ -72,7 +68,6 @@ jobs:
           composer install --no-interaction --no-progress --prefer-dist
 
       - name: Provide RoadRunner
-        if: steps.prerequisites.outputs.available == 'true'
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/tusk-tools"
@@ -86,6 +81,5 @@ jobs:
           echo "$RUNNER_TEMP/tusk-tools" >> "$GITHUB_PATH"
 
       - name: Run generated skeleton through RoadRunner
-        if: steps.prerequisites.outputs.available == 'true'
         shell: pwsh
         run: ./test/skeleton/smoke.ps1 -FrameworkPath "$env:RUNNER_TEMP/tusk-framework" -RoadRunnerPath "$env:RUNNER_TEMP/tusk-tools/rr"
