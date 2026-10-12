@@ -44,11 +44,16 @@ preserved.
 ## Release policy
 
 Use the latest stable `vMAJOR.MINOR.PATCH` tag as the comparison point and
-consider Conventional Commit messages reachable from the current `main` head
-but not from that tag. The merge commit representation used by the repository
-must be explicitly supported; because the repository uses squash merges, the
-validated pull-request title is the canonical release signal and the squash
-commit subject must retain it.
+consider non-merge Conventional Commit messages reachable from the current
+`main` head but not from that tag. The Engine history contains both squash
+commits and synthetic GitHub merge commits. Ignore synthetic merge wrapper
+messages (for example, `Merge pull request #...`) while retaining commits
+inside those merges; this prevents GitHub's merge metadata from being
+misclassified as malformed input. For squash merges, the validated PR title
+is the canonical release signal and the squash commit subject must retain it.
+For regular merge commits, the PR title is validated before merge and the
+individual commits are classified; contribution rules require those commit
+messages to use Conventional Commits as well.
 
 Increment rules:
 

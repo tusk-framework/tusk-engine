@@ -60,7 +60,7 @@
 
 - [ ] **Step 1: Add CLI tests** for valid release, no-release, malformed input, and clean output format.
 - [ ] **Step 2: Run `go test ./cmd/tusk-release`** and confirm the tests fail before implementation.
-- [ ] **Step 3: Implement the CLI** with explicit flags for current version and message source; ensure it does not fetch network data or mutate Git state.
+- [ ] **Step 3: Implement the CLI** with explicit flags for previous stable tag and target commit; obtain messages using read-only `git log --no-merges --format=%B <tag>..<target>`; ensure it does not fetch network data or mutate Git state.
 - [ ] **Step 4: Clarify `CONTRIBUTING.md`** that PR titles are validated as Conventional Commits and the squash commit subject must preserve the title; specify breaking footer/`!` syntax.
 - [ ] **Step 5: Run `go test ./cmd/tusk-release ./internal/release`** and inspect output for absence of logs that could corrupt GitHub outputs.
 - [ ] **Step 6: Commit** as `feat: expose deterministic release calculation to CI`.
