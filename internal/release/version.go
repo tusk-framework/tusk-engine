@@ -12,9 +12,9 @@ import (
 )
 
 var stableVersionPattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-var releaseRelevantHeader = regexp.MustCompile(`(?i)^(feat|fix|perf)(?:\([^\r\n)]*\))?!?(?:\s|:|$)`)
 var breakingMetadata = regexp.MustCompile(`(?im)^\s*BREAKING CHANGE\s*:`)
 var validBreakingMetadata = regexp.MustCompile(`(?im)^\s*BREAKING CHANGE:\s*\S`)
+var conventionalTypeToken = regexp.MustCompile(`^([[:alpha:]]+)`)
 
 const (
 	noBump = iota
@@ -52,8 +52,12 @@ func CalculateNextVersion(current string, messages []string) (string, bool, erro
 			return "", false, fmt.Errorf("invalid Conventional Commit message %q: BREAKING CHANGE footer must have a value", message)
 		}
 		parsed, err := parseMessage(message)
+		releaseRelevant := hasReleaseRelevantHeader(message)
+		if releaseRelevant && !hasCanonicalReleaseType(message) {
+			return "", false, fmt.Errorf("invalid Conventional Commit message %q: release-relevant type must be lowercase", message)
+		}
 		if err != nil {
-			if isReleaseRelevant(message) || breakingMetadata.MatchString(message) || hasReleaseRelevantHeader(message) {
+			if releaseRelevant || breakingMetadata.MatchString(message) {
 				return "", false, fmt.Errorf("invalid Conventional Commit message %q: %w", message, err)
 			}
 			continue
@@ -99,25 +103,28 @@ func CalculateNextVersion(current string, messages []string) (string, bool, erro
 
 func parseMessage(message string) (conventionalcommits.Message, error) {
 	machine := parser.NewMachine(parser.WithTypes(conventionalcommits.TypesFreeForm))
-	strictMachine, ok := machine.(parser.Machine)
-	if ok {
-		strictMachine.WithStrictUTF8()
-	}
+	machine.WithStrictUTF8()
 	return machine.Parse([]byte(message))
-}
-
-func isReleaseRelevant(message string) bool {
-	header := strings.SplitN(message, "\n", 2)[0]
-	return releaseRelevantHeader.MatchString(header)
 }
 
 func hasReleaseRelevantHeader(message string) bool {
 	header := strings.SplitN(message, "\n", 2)[0]
 	header = strings.TrimSpace(header)
-	for _, prefix := range []string{"feat", "fix", "perf"} {
-		if strings.HasPrefix(strings.ToLower(header), prefix) {
-			return true
-		}
+	typeToken := conventionalTypeToken.FindStringSubmatch(header)
+	if len(typeToken) < 2 {
+		return false
 	}
-	return false
+
+	switch strings.ToLower(typeToken[1]) {
+	case "feat", "fix", "perf":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasCanonicalReleaseType(message string) bool {
+	header := strings.TrimSpace(strings.SplitN(message, "\n", 2)[0])
+	typeToken := conventionalTypeToken.FindStringSubmatch(header)
+	return len(typeToken) > 1 && typeToken[1] == strings.ToLower(typeToken[1])
 }

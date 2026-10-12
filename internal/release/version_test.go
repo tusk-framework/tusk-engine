@@ -92,6 +92,24 @@ func TestCalculateNextVersion(t *testing.T) {
 			wantErrorMatch: "message",
 		},
 		{
+			name:           "case variant release type is malformed",
+			current:        "v1.2.3",
+			messages:       []string{"Feat: add API"},
+			wantErrorMatch: "message",
+		},
+		{
+			name:           "malformed case variant release scope",
+			current:        "v1.2.3",
+			messages:       []string{"Fix(api: repair"},
+			wantErrorMatch: "message",
+		},
+		{
+			name:           "invalid utf8 in release relevant message",
+			current:        "v1.2.3",
+			messages:       []string{"fix: repair\xff"},
+			wantErrorMatch: "message",
+		},
+		{
 			name:           "malformed breaking metadata",
 			current:        "v1.2.3",
 			messages:       []string{"docs: revise guide\n\nBREAKING CHANGE:"},

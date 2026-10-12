@@ -84,10 +84,33 @@ remaining test or toolchain blocker.
 - Confirmed the parser dependency is pinned to v0.13.0 and checksums are
   recorded.
 - Compared the task changes against review base
-  `fc1a87b32fd403ee7a48e1056e93a8db18bc1a94`; no plan/spec edits are included.
+  `fc1a87b32fd403ee7a48e1056e93a8db18bc1a94`; implementation, dependency,
+  and this report are included in the task diff. Separate plan/spec edits are
+  excluded.
 - No CLI or workflow files were changed.
 
 ## Commit
 
 - Implementation: `95c8916` (`feat: calculate semantic engine release versions`)
-- Report: `4286cbe` (`docs: record version calculator implementation report`)
+- The report was included in the implementation task history; its commit is
+  identified by the containing commit rather than a separate report-only hash.
+
+## Fix round 1
+
+- Replaced the narrow malformed-header detector with independent parsing of
+  the initial Conventional Commit type token. Case-insensitive detection
+  identifies release-relevant messages even when the rest of the header is
+  malformed; their parser errors now fail closed. Release-relevant type tokens
+  must also use canonical lowercase spelling.
+- The strict UTF-8 parser instance is now the instance used to parse the
+  message.
+- Regression tests cover `Feat: add API`, malformed `Fix(api: repair`, and
+  invalid UTF-8 in a release-relevant message.
+
+Focused test evidence:
+
+```text
+Command: go test ./internal/release -count=1
+Output:  ok github.com/tusk-framework/tusk-engine/internal/release 0.959s
+Exit code: 0
+```
