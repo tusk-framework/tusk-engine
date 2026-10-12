@@ -119,20 +119,22 @@
 **Files:**
 - Create: `.github/workflows/automatic-release.yml`
 - Modify: `.github/workflows/docker-publish.yml`
-- Modify: `.github/workflows/publish-release.yml`
+- Modify: `.github/actions/publish-release/action.yml`
+- Modify: `.github/actions/verify-required-checks/action.yml`
+- Modify: `.github/workflows/docker-publish.yml`
 
 **Interfaces:**
 - Consumes: `workflow_run` events; Task 4 shared verifier output proving successful required Go, Docker validation, and Skeleton smoke runs for one immutable main SHA; Task 2 CLI output; Task 4 local composite publisher.
 - Produces: at most one immutable `vMAJOR.MINOR.PATCH` tag and matching GitHub release for that validated SHA; mutable `main` image and optional versioned Docker image only after all required checks succeed for the same SHA.
 
-- [ ] **Step 1: Add orchestration contract tests/scripts** for no release, successful release, `main` advancing while queued, tag collision, already-complete release, and retry after partial publication.
+- [ ] **Step 1: Add orchestration contract tests/scripts** for no release, successful release, `main` advancing while queued, tag collision, already-published release, existing same-SHA tag with incomplete draft, and retry after partial publication.
 - [ ] **Step 2: Run those tests** and confirm the stale-SHA/tag-race cases fail before workflow implementation.
 - [ ] **Step 3: Add a `workflow_run` aggregator** for Go, Docker validation, and Skeleton smoke. Accept only same-repository `push` runs on `main`; call Task 4's verifier for the exact event SHA and proceed only when all required runs succeeded. Serialize release jobs (`cancel-in-progress: false`), keep calculation read-only, and scope tag/release mutation to a job with `contents: write`.
-- [ ] **Step 4: Before tag mutation, re-fetch remote tags and `main`;** skip stale runs if SHA changed, skip cleanly when no release is due, and fail on conflicting target tags.
+- [ ] **Step 4: Reconcile an existing candidate tag before calculating a new version.** If it points to the event SHA, resume that tag's draft publication (the shared publisher safely no-ops if already published); if it points elsewhere, fail without mutation. For a new tag, re-fetch remote tags and `main`, skip stale runs, and fail on a conflicting target tag.
 - [ ] **Step 5: Create an annotated version tag at the exact tested SHA** and call the shared publisher within the same workflow run, without relying on tag push to trigger Actions.
-- [ ] **Step 6: Implement retry rules**: same tag + same SHA + incomplete release can resume idempotently; completed releases exit successfully; different SHA or conflicting assets fail without mutation.
+- [ ] **Step 6: Implement retry rules**: same tag + same SHA + incomplete draft can resume idempotently; an already-published release is a no-op; different SHA or conflicting assets fail without mutation. Never calculate the next version from a range that omits an already-created candidate tag for this same SHA.
 - [ ] **Step 7: Publish Docker image tag `v<version>` from the same validated SHA** after version calculation; preserve mutable `main` image behavior separately and prevent it from satisfying validation dependencies.
-- [ ] **Step 8: Call the reusable Docker publisher only after all required validation succeeds**, publishing `main` even when semantic version calculation reports no release, and publishing both `main` and `v<version>` when a release is due.
+- [ ] **Step 8: Preflight release prerequisites before creating a new immutable tag**, including catalog payload download validation and presence of signing/trust-anchor configuration; fail before the tag if required setup is missing. Call the reusable Docker publisher only after all required validation succeeds, publishing `main` even when semantic version calculation reports no release, and publishing both `main` and `v<version>` when a release is due.
 - [ ] **Step 9: Validate action graph/YAML and run all Go tests**; assert each acceptance criterion has a corresponding workflow/test check.
 - [ ] **Step 10: Commit** as `feat: publish engine releases after successful main checks`.
 

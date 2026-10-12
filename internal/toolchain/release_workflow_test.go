@@ -123,6 +123,32 @@ func TestReleaseWorkflowBindsSignedCatalogDigestIntoBinaries(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowUsesTrustedTagTriggerAndProtectsPublishedReleases(t *testing.T) {
+	root := repositoryRoot(t)
+	workflow := readRepositoryFile(t, root, ".github", "workflows", "release.yml")
+	action := readRepositoryFile(t, root, ".github", "actions", "publish-release", "action.yml")
+	if strings.Contains(workflow, "workflow_dispatch") {
+		t.Fatal("release workflow must not run privileged publication code from a manually selected ref")
+	}
+	for _, expected := range []string{
+		"Guard already-published release",
+		"if [[ -z \"$GH_TOKEN\" ]]",
+		"https://api.github.com/repos/$GH_REPOSITORY/releases/tags/$RELEASE_TAG",
+		"already-published=true",
+		"if: steps.published-guard.outputs.already-published != 'true'",
+	} {
+		if !strings.Contains(action, expected) {
+			t.Errorf("publisher is missing published-release safety contract %q", expected)
+		}
+	}
+	if strings.Count(action, "if: steps.published-guard.outputs.already-published != 'true'") < 7 {
+		t.Fatal("all signing, attestation, digest, and GoReleaser steps must be skipped for a published release")
+	}
+	if strings.Index(action, "Guard already-published release") > strings.Index(action, "go run ./cmd/tusk-catalog sign") {
+		t.Fatal("published-release guard must run before signing")
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

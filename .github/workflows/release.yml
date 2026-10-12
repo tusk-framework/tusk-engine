@@ -4,12 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing stable release tag to publish
-        required: true
-        type: string
 
 permissions:
   contents: none
@@ -34,7 +28,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -86,7 +80,7 @@ jobs:
       - name: Publish exact stable tag
         uses: ./.github/actions/publish-release
         with:
-          tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          tag: ${{ github.ref_name }}
           expected-sha: ${{ needs.verify.outputs.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

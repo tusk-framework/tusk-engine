@@ -7,6 +7,10 @@ inputs:
   expected-sha:
     description: Full expected source commit SHA.
     required: true
+outputs:
+  already-published:
+    description: True when this tag already has a published release and publication was skipped.
+    value: ${{ steps.published-guard.outputs.already-published }}
 runs:
   using: composite
   steps:
@@ -50,12 +54,56 @@ runs:
           exit 1
         fi
 
+    - name: Guard already-published release
+      id: published-guard
+      shell: bash
+      env:
+        GH_TOKEN: ${{ env.GITHUB_TOKEN }}
+        GH_REPOSITORY: ${{ github.repository }}
+        RELEASE_TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        if [[ -z "$GH_TOKEN" ]]; then
+          echo "GITHUB_TOKEN is required to check release state" >&2
+          exit 1
+        fi
+        response_file="$(mktemp)"
+        trap 'rm -f "$response_file"' EXIT
+        status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
+          --header "Authorization: Bearer $GH_TOKEN" \
+          --header 'Accept: application/vnd.github+json' \
+          --header 'X-GitHub-Api-Version: 2022-11-28' \
+          "https://api.github.com/repos/$GH_REPOSITORY/releases/tags/$RELEASE_TAG")"
+        case "$status" in
+          200)
+            if ! jq -e 'has("draft") and (.draft | type == "boolean")' "$response_file" >/dev/null; then
+              echo "GitHub release response was missing a valid draft state" >&2
+              exit 1
+            fi
+            if [[ "$(jq -r '.draft' "$response_file")" == "false" ]]; then
+              echo "Release $RELEASE_TAG is already published; publication steps will be skipped."
+              echo "already-published=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "already-published=false" >> "$GITHUB_OUTPUT"
+            fi
+            ;;
+          404)
+            echo "already-published=false" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "Could not safely determine release state (GitHub API HTTP $status)" >&2
+            exit 1
+            ;;
+        esac
+
     - name: Set up Go
       uses: actions/setup-go@v6
+      if: steps.published-guard.outputs.already-published != 'true'
       with:
         go-version: '1.23'
 
     - name: Validate official catalog payload and signing inputs
+      if: steps.published-guard.outputs.already-published != 'true'
       shell: bash
       env:
         TUSK_CATALOG_SIGNING_KEY_B64: ${{ env.TUSK_CATALOG_SIGNING_KEY_B64 }}
@@ -70,6 +118,7 @@ runs:
         go run ./cmd/tusk-catalog validate --download --payload release/toolchain-catalog.payload.json
 
     - name: Sign and verify official catalog
+      if: steps.published-guard.outputs.already-published != 'true'
       shell: bash
       env:
         TUSK_CATALOG_SIGNING_KEY_B64: ${{ env.TUSK_CATALOG_SIGNING_KEY_B64 }}
@@ -84,16 +133,19 @@ runs:
         go run ./cmd/tusk-catalog verify --catalog release/toolchain-catalog.json
 
     - name: Attest signed catalog
+      if: steps.published-guard.outputs.already-published != 'true'
       uses: actions/attest@v4
       with:
         subject-path: release/toolchain-catalog.json
 
     - name: Attest catalog provenance
+      if: steps.published-guard.outputs.already-published != 'true'
       uses: actions/attest@v4
       with:
         subject-path: release/toolchain-catalog.provenance.json
 
     - name: Bind signed catalog digest to release binaries
+      if: steps.published-guard.outputs.already-published != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -102,6 +154,7 @@ runs:
         echo "TUSK_CATALOG_SHA256=$digest" >> "$GITHUB_ENV"
 
     - name: Run GoReleaser
+      if: steps.published-guard.outputs.already-published != 'true'
       uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
       with:
         distribution: goreleaser
