@@ -123,12 +123,15 @@ func TestReleaseWorkflowBindsSignedCatalogDigestIntoBinaries(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowUsesTrustedTagTriggerAndProtectsPublishedReleases(t *testing.T) {
+func TestReleaseWorkflowUsesTrustedCallerAndProtectsPublishedReleases(t *testing.T) {
 	root := repositoryRoot(t)
 	workflow := readRepositoryFile(t, root, ".github", "workflows", "release.yml")
 	action := readRepositoryFile(t, root, ".github", "actions", "publish-release", "action.yml")
-	if strings.Contains(workflow, "workflow_dispatch") {
-		t.Fatal("release workflow must not run privileged publication code from a manually selected ref")
+	if strings.Contains(workflow, "workflow_dispatch") || strings.Contains(workflow, "push:") {
+		t.Fatal("privileged release workflow must not be directly triggered by a selected ref or tag push")
+	}
+	if !strings.Contains(workflow, "workflow_call:") {
+		t.Fatal("release workflow must only be callable by a trusted workflow")
 	}
 	for _, expected := range []string{
 		"Guard already-published release",

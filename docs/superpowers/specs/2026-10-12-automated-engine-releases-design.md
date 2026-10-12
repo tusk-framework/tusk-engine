@@ -107,14 +107,13 @@ succeeded for the same commit, a serialized release job will:
    must neither satisfy nor bypass required release validation.
 
 Tag creation must not be used as an event hand-off to a separate workflow:
-   GitHub suppresses most workflow runs caused by events generated with
-   `GITHUB_TOKEN`. Tag-triggered manual/compatibility releases may remain
-   supported, but both entry paths must call the same release implementation
-   to prevent policy drift. A tag-triggered run must validate that it is a
-   stable version tag and build/publish that exact tag. GitHub reusable
-   workflows execute as jobs rather than steps, so the shared publisher must
-   be called as a reusable workflow job, composite action, or repository-local
-   script; do not attempt to invoke a reusable workflow as a step.
+GitHub suppresses most workflow runs caused by events generated with
+`GITHUB_TOKEN`. The privileged publisher is called only from the trusted
+`workflow_run` aggregator; tag refs are data and never provide the workflow or
+action definitions that receive publication credentials. GitHub reusable
+workflows execute as jobs rather than steps, so the shared publisher must be
+called as a reusable workflow job, composite action, or repository-local
+script; do not attempt to invoke a reusable workflow as a step.
 
 The release job must use the narrowest permissions that support tag creation,
 GitHub release upload, OIDC-backed attestations, and package publication only

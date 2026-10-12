@@ -101,15 +101,15 @@
 
 **Interfaces:**
 - Produces: shared composite publication action accepting an immutable version tag and expected source SHA, validating both, then running the existing signed catalog and GoReleaser sequence exactly once.
-- Produces: shared required-check verifier that reports true only when Go, Docker validation, and Skeleton smoke have successful `push` runs on `main` for the exact SHA; it uses read-only Actions API access and is shared by the manual-tag caller and automatic aggregator.
-- Consumes: tag/version and SHA from either the automatic main orchestrator or an explicitly supported manual stable-tag invocation; signing credentials are passed only through caller step environment and never as logged inputs.
+- Produces: shared required-check verifier that reports true only when Go, Docker validation, and Skeleton smoke have successful `push` runs on `main` for the exact SHA; it uses read-only Actions API access and is shared by the trusted automatic main orchestrator.
+- Consumes: tag/version and SHA from the trusted automatic main orchestrator; signing credentials are passed only through caller step environment and never as logged inputs.
 
 - [ ] **Step 1: Capture existing release contract** in checks for signed catalog, provenance, checksums, attestations, and exact binary version/digest.
 - [ ] **Step 2: Run current release validation tests/checks** to establish the baseline and inspect GoReleaser config behavior for exact tags.
 - [ ] **Step 3: Create `verify-required-checks`** that accepts a SHA, queries only same-repository Actions runs, and emits `validated=true` only when the latest `push` runs named `Go`, `Docker validation`, and `Skeleton smoke` all have `head_branch=main`, matching SHA, `status=completed`, and `conclusion=success`; absent/running/failed checks emit false, API errors fail.
 - [ ] **Step 4: Extract the signed release steps** into a local composite action with stable-tag validation, expected-SHA verification, Go 1.23, and pinned GoReleaser CLI v2.18.3/action v7.2.3 (`f06c13b6b1a9625abc9e6e439d9c05a8f2190e94`).
 - [ ] **Step 5: Configure safe GoReleaser retry behavior** with `preflight.fail_on_error: true`, `use_existing_draft: true`, and `replace_existing_artifacts: true`; retries may reuse an incomplete draft for the same tag/SHA, but must not alter a published release.
-- [ ] **Step 6: Gate tag-triggered compatibility/manual publishing** on stable tag, tag SHA equal to current `main`, and `verify-required-checks=true`; never move tags. Scope actions-read permission to validation and contents/OIDC/attestation permissions to the publication job.
+- [ ] **Step 6: Make `release.yml` callable only via `workflow_call`** and call it only from the trusted `workflow_run` aggregator after validation; never execute publication from tag or manually selected refs. Scope actions-read permission to validation and contents/OIDC/attestation permissions to the publication job/caller as required by reusable-workflow permission inheritance.
 - [ ] **Step 7: Add workflow-level validation** that missing signing inputs, invalid payload, mismatched SHA, or wrong tag fail before publication.
 - [ ] **Step 8: Validate workflow YAML and GoReleaser configuration**; confirm existing release assets and trust chain are preserved.
 - [ ] **Step 9: Commit** as `refactor: share exact-tag signed release publication`.
