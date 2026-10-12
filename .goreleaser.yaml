@@ -43,6 +43,10 @@ checksum:
   name_template: 'checksums.txt'
 
 release:
+  preflight:
+    fail_on_error: true
+  use_existing_draft: true
+  replace_existing_artifacts: true
   extra_files:
     - glob: release/toolchain-catalog.json
     - glob: release/toolchain-catalog.provenance.json

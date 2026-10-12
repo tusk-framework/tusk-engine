@@ -11,6 +11,7 @@ import (
 func TestReleaseWorkflowRequiresCatalogSigningAndAttestationSteps(t *testing.T) {
 	root := repositoryRoot(t)
 	workflow := readRepositoryFile(t, root, ".github", "workflows", "release.yml")
+	action := readRepositoryFile(t, root, ".github", "actions", "publish-release", "action.yml")
 	required := []string{
 		"contents: write",
 		"id-token: write",
@@ -18,24 +19,31 @@ func TestReleaseWorkflowRequiresCatalogSigningAndAttestationSteps(t *testing.T) 
 		"TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}",
 		"TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}",
 		"TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}",
-		"release/toolchain-catalog.payload.json",
-		"go run ./cmd/tusk-catalog validate --download",
-		"go run ./cmd/tusk-catalog sign",
-		"go run ./cmd/tusk-catalog verify",
-		"actions/attest@v4",
 	}
 	for _, expected := range required {
 		if !strings.Contains(workflow, expected) {
 			t.Errorf("release workflow is missing %q", expected)
 		}
 	}
-	if strings.Contains(strings.ToLower(workflow), "private.key") || strings.Contains(strings.ToLower(workflow), "private-key") {
+	actionRequired := []string{
+		"release/toolchain-catalog.payload.json",
+		"go run ./cmd/tusk-catalog validate --download",
+		"go run ./cmd/tusk-catalog sign",
+		"go run ./cmd/tusk-catalog verify",
+		"actions/attest@v4",
+	}
+	for _, expected := range actionRequired {
+		if !strings.Contains(action, expected) {
+			t.Errorf("publish action is missing %q", expected)
+		}
+	}
+	if strings.Contains(strings.ToLower(workflow+action), "private.key") || strings.Contains(strings.ToLower(workflow+action), "private-key") {
 		t.Fatal("release workflow references a private-key file")
 	}
-	if strings.Index(workflow, "go run ./cmd/tusk-catalog sign") > strings.Index(workflow, "Run GoReleaser") {
+	if strings.Index(action, "go run ./cmd/tusk-catalog sign") > strings.Index(action, "Run GoReleaser") {
 		t.Fatal("catalog signing must happen before GoReleaser")
 	}
-	if strings.Index(workflow, "go run ./cmd/tusk-catalog validate") > strings.Index(workflow, "go run ./cmd/tusk-catalog sign") {
+	if strings.Index(action, "go run ./cmd/tusk-catalog validate") > strings.Index(action, "go run ./cmd/tusk-catalog sign") {
 		t.Fatal("catalog payload validation must happen before signing")
 	}
 }
@@ -99,13 +107,13 @@ func TestReleaseDocumentationCoversSecretHandlingRotationAndRevocation(t *testin
 
 func TestReleaseWorkflowBindsSignedCatalogDigestIntoBinaries(t *testing.T) {
 	root := repositoryRoot(t)
-	workflowText := readRepositoryFile(t, root, ".github", "workflows", "release.yml")
-	compute := strings.Index(workflowText, "sha256sum release/toolchain-catalog.json")
-	release := strings.Index(workflowText, "Run GoReleaser")
+	actionText := readRepositoryFile(t, root, ".github", "actions", "publish-release", "action.yml")
+	compute := strings.Index(actionText, "sha256sum release/toolchain-catalog.json")
+	release := strings.Index(actionText, "Run GoReleaser")
 	if compute < 0 || release < 0 || compute > release {
 		t.Fatal("release workflow must compute the signed catalog digest before GoReleaser")
 	}
-	if !strings.Contains(workflowText, "TUSK_CATALOG_SHA256=$digest") || !strings.Contains(workflowText, "[[ \"$digest\" =~ ^[a-f0-9]{64}$ ]]") {
+	if !strings.Contains(actionText, "TUSK_CATALOG_SHA256=$digest") || !strings.Contains(actionText, "[[ \"$digest\" =~ ^[a-f0-9]{64}$ ]]") {
 		t.Fatal("release workflow must validate and export the lowercase SHA-256 digest")
 	}
 

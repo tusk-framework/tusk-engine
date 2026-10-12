@@ -4,79 +4,92 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to publish
+        required: true
+        type: string
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: none
 
 jobs:
-  goreleaser:
+  verify:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      matches: ${{ steps.main.outputs.matches }}
+      sha: ${{ steps.main.outputs.sha }}
+      validated: ${{ steps.checks.outputs.validated }}
     steps:
-      - name: Checkout
+      - name: Checkout workflow source
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.23'
-
-      - name: Validate official catalog payload
-        run: go run ./cmd/tusk-catalog validate --download --payload release/toolchain-catalog.payload.json
-
-      - name: Validate official catalog release inputs
+      - name: Verify tag resolves to current main
+        id: main
         shell: bash
         env:
-          TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}
-          TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}
-          TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          test -s release/toolchain-catalog.payload.json
-          test -n "$TUSK_CATALOG_SIGNING_KEY_B64"
-          test -n "$TUSK_CATALOG_KEY_ID"
-          test -n "$TUSK_CATALOG_TRUST_ANCHORS_B64"
-
-      - name: Sign and verify official catalog
-        shell: bash
-        env:
-          TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}
-          TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}
-          TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
-        run: |
-          go run ./cmd/tusk-catalog sign \
-            --payload release/toolchain-catalog.payload.json \
-            --catalog release/toolchain-catalog.json \
-            --provenance release/toolchain-catalog.provenance.json
-          go run ./cmd/tusk-catalog verify \
-            --catalog release/toolchain-catalog.json
-
-      - name: Attest signed catalog
-        uses: actions/attest@v4
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Tag must be a stable vMAJOR.MINOR.PATCH tag" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/tags/$TAG:refs/task4/$TAG"
+          tag_sha="$(git rev-parse "refs/task4/$TAG^{commit}")"
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [[ "$tag_sha" == "$main_sha" ]]; then
+            echo "matches=true" >> "$GITHUB_OUTPUT"
+            echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+          else
+            echo "matches=false" >> "$GITHUB_OUTPUT"
+            echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+            echo "Stable tag does not point to the current main commit" >&2
+            exit 1
+          fi
+      - name: Check required main runs for exact source SHA
+        id: checks
+        uses: ./.github/actions/verify-required-checks
         with:
-          subject-path: release/toolchain-catalog.json
-
-      - name: Attest catalog provenance
-        uses: actions/attest@v4
-        with:
-          subject-path: release/toolchain-catalog.provenance.json
-
-      - name: Bind signed catalog digest to release binaries
+          sha: ${{ steps.main.outputs.sha }}
+          token: ${{ github.token }}
+      - name: Fail when required main checks have not passed
+        if: always() && steps.main.outputs.matches == 'true' && (steps.checks.outcome == 'failure' || steps.checks.outputs.validated != 'true')
         shell: bash
         run: |
-          digest="$(sha256sum release/toolchain-catalog.json | cut -d ' ' -f 1)"
-          [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
-          echo "TUSK_CATALOG_SHA256=$digest" >> "$GITHUB_ENV"
+          echo "Required main push checks are missing, pending, or unsuccessful for this commit" >&2
+          exit 1
+      - name: Fail when tag does not point to current main
+        if: always() && steps.main.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "Stable tag does not point to the current main commit or could not be resolved" >&2
+          exit 1
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+  publish:
+    needs: verify
+    if: needs.verify.result == 'success' && needs.verify.outputs.matches == 'true' && needs.verify.outputs.validated == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout repository for local publication action
+        uses: actions/checkout@v5
+      - name: Publish exact stable tag
+        uses: ./.github/actions/publish-release
         with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+          tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          expected-sha: ${{ needs.verify.outputs.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}
+          TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}
           TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
-          TUSK_CATALOG_SHA256: ${{ env.TUSK_CATALOG_SHA256 }}

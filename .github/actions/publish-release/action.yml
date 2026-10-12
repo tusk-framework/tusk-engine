@@ -1,0 +1,113 @@
+name: Publish signed Tusk release
+description: Validate and publish one immutable stable version tag from its expected source commit.
+inputs:
+  tag:
+    description: Stable release tag in vMAJOR.MINOR.PATCH form.
+    required: true
+  expected-sha:
+    description: Full expected source commit SHA.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Validate release tag and expected source SHA
+      shell: bash
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        EXPECTED_SHA: ${{ inputs.expected-sha }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          echo "Release tag must be a stable vMAJOR.MINOR.PATCH tag" >&2
+          exit 1
+        fi
+        if [[ ! "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+          echo "Expected source SHA must be a full lowercase 40-character commit SHA" >&2
+          exit 1
+        fi
+
+    - name: Checkout exact expected source commit
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.expected-sha }}
+        fetch-depth: 0
+
+    - name: Verify stable tag resolves to expected source commit
+      shell: bash
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        EXPECTED_SHA: ${{ inputs.expected-sha }}
+      run: |
+        set -euo pipefail
+        git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/task4/$RELEASE_TAG"
+        actual_sha="$(git rev-parse "refs/task4/$RELEASE_TAG^{commit}")"
+        if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+          echo "Release tag does not resolve to the expected source commit" >&2
+          exit 1
+        fi
+        if [[ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]]; then
+          echo "Checkout does not match the expected source commit" >&2
+          exit 1
+        fi
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.23'
+
+    - name: Validate official catalog payload and signing inputs
+      shell: bash
+      env:
+        TUSK_CATALOG_SIGNING_KEY_B64: ${{ env.TUSK_CATALOG_SIGNING_KEY_B64 }}
+        TUSK_CATALOG_KEY_ID: ${{ env.TUSK_CATALOG_KEY_ID }}
+        TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ env.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+      run: |
+        set -euo pipefail
+        test -s release/toolchain-catalog.payload.json
+        test -n "$TUSK_CATALOG_SIGNING_KEY_B64"
+        test -n "$TUSK_CATALOG_KEY_ID"
+        test -n "$TUSK_CATALOG_TRUST_ANCHORS_B64"
+        go run ./cmd/tusk-catalog validate --download --payload release/toolchain-catalog.payload.json
+
+    - name: Sign and verify official catalog
+      shell: bash
+      env:
+        TUSK_CATALOG_SIGNING_KEY_B64: ${{ env.TUSK_CATALOG_SIGNING_KEY_B64 }}
+        TUSK_CATALOG_KEY_ID: ${{ env.TUSK_CATALOG_KEY_ID }}
+        TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ env.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+      run: |
+        set -euo pipefail
+        go run ./cmd/tusk-catalog sign \
+          --payload release/toolchain-catalog.payload.json \
+          --catalog release/toolchain-catalog.json \
+          --provenance release/toolchain-catalog.provenance.json
+        go run ./cmd/tusk-catalog verify --catalog release/toolchain-catalog.json
+
+    - name: Attest signed catalog
+      uses: actions/attest@v4
+      with:
+        subject-path: release/toolchain-catalog.json
+
+    - name: Attest catalog provenance
+      uses: actions/attest@v4
+      with:
+        subject-path: release/toolchain-catalog.provenance.json
+
+    - name: Bind signed catalog digest to release binaries
+      shell: bash
+      run: |
+        set -euo pipefail
+        digest="$(sha256sum release/toolchain-catalog.json | cut -d ' ' -f 1)"
+        [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+        echo "TUSK_CATALOG_SHA256=$digest" >> "$GITHUB_ENV"
+
+    - name: Run GoReleaser
+      uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+      with:
+        distribution: goreleaser
+        version: v2.18.3
+        args: release --clean
+      env:
+        GITHUB_TOKEN: ${{ env.GITHUB_TOKEN }}
+        TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ env.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+        TUSK_CATALOG_SHA256: ${{ env.TUSK_CATALOG_SHA256 }}
