@@ -69,20 +69,27 @@
 
 **Files:**
 - Create: `.github/workflows/pr-title.yml`
+- Create: `.github/workflows/docker-validation.yml`
 - Modify: `.github/workflows/go.yml`
 - Modify: `.github/workflows/test.yml`
 - Modify: `.github/workflows/docker-publish.yml`
+- Modify: `internal/release/version.go`
+- Modify: `internal/release/version_test.go`
+- Modify: `cmd/tusk-release/main.go`
+- Modify: `cmd/tusk-release/main_test.go`
 
 **Interfaces:**
-- Produces: stable workflow names and success conclusions consumed by the `workflow_run` aggregator; PR title validation blocks invalid Conventional Commit titles before merge.
+- Produces: stable workflow names (`Go`, `Docker validation`, `Skeleton smoke`) and success conclusions consumed by the `workflow_run` aggregator; PR title validation uses the same Go parser as release calculation and blocks invalid Conventional Commit titles before merge.
+- Produces: `release.ValidateConventionalCommit(message string) error` and `tusk-release validate-message --message <title>`; valid non-release types are accepted, malformed titles fail.
 
-- [ ] **Step 1: Define workflow validation cases** for valid `feat`, `fix`, `perf`, arbitrary non-release type, `!` breaking notation, footer breaking notation, and invalid/malformed title; use the same parser/policy as Task 1 where practical.
-- [ ] **Step 2: Run local action/workflow lint and the Go tests** to establish expected validation before editing workflow behavior.
-- [ ] **Step 3: Add a title-validation workflow** triggered on pull request opened/edited/synchronize/reopened; pin its action or use the Task 1 parser in a minimal Go invocation.
-- [ ] **Step 4: Split Docker build validation from registry publication** so the required Docker validation job is read-only and deterministic; keep mutable `main` push separate and non-gating.
-- [ ] **Step 5: Give the Go and skeleton workflows stable check names** and ensure each reports failure (not silent success) when prerequisites or tests fail.
-- [ ] **Step 6: Verify workflow syntax and run relevant tests**; document the required check names and title contract.
-- [ ] **Step 7: Commit** as `ci: validate conventional pull request titles and release gates`.
+- [ ] **Step 1: Add parser/CLI tests** for valid `feat`, `fix`, `perf`, arbitrary non-release type, `!` notation, breaking footer, malformed title, and invalid UTF-8 where relevant.
+- [ ] **Step 2: Run focused Go tests** and confirm new validation tests fail before implementation.
+- [ ] **Step 3: Implement `release.ValidateConventionalCommit`** with the pinned parser and expose `tusk-release validate-message --message <title>`; add CLI and package tests.
+- [ ] **Step 4: Add `pr-title.yml`** triggered on opened/edited/synchronize/reopened pull requests. Pass title through an environment variable (never interpolate untrusted title into a shell script) and validate with the Go CLI; grant read-only permissions.
+- [ ] **Step 5: Split Docker validation from image publication**: create a read-only `Docker validation` workflow and leave mutable `main` image publication in `docker-publish.yml`, so image push outcome cannot affect the release validation workflow conclusion.
+- [ ] **Step 6: Set stable workflow names** `Go`, `Docker validation`, and `Skeleton smoke`; make missing smoke prerequisites fail rather than silently skip required checks.
+- [ ] **Step 7: Verify workflow syntax and Go tests**; document required check names and the title/mixed-merge contract.
+- [ ] **Step 8: Commit** as `ci: validate conventional pull request titles and release gates`.
 
 ### Task 4: Shared exact-tag signed publication workflow
 
