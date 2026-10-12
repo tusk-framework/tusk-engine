@@ -1,15 +1,23 @@
 name: Docker image publication
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      image-name:
+        description: Fully qualified image name, for example ghcr.io/owner/repository
+        required: true
+        type: string
+      tags:
+        description: Optional newline-separated additional image tags; main is always included
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   publish-main:
@@ -35,8 +43,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: type=raw,value=main
+          images: ${{ inputs.image-name }}
+          tags: |
+            type=raw,value=main
+            ${{ inputs.tags }}
 
       - name: Build and push mutable main image
         uses: docker/build-push-action@v7
