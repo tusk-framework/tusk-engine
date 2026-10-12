@@ -1,0 +1,303 @@
+name: Automatic release
+
+on:
+  workflow_run:
+    workflows:
+      - Go
+      - Docker validation
+      - Skeleton smoke
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: automatic-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      accepted: ${{ steps.accepted.outputs.accepted }}
+      sha: ${{ steps.current-main.outputs.sha }}
+    steps:
+      - name: Check out trusted default-branch workflow code
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate workflow_run metadata
+        id: event
+        shell: bash
+        env:
+          EVENT_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EVENT_NAME: ${{ github.event.workflow_run.event }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_REPOSITORY" != "$EXPECTED_REPOSITORY" || "$HEAD_REPOSITORY" != "$EXPECTED_REPOSITORY" || \
+                "$HEAD_BRANCH" != "main" || "$EVENT_NAME" != "push" || "$CONCLUSION" != "success" || \
+                ! "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "accepted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$WORKFLOW_NAME" in
+            "Go"|"Docker validation"|"Skeleton smoke") ;;
+            *) echo "accepted=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          echo "accepted=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve current main as the release candidate
+        id: current-main
+        if: steps.event.outputs.accepted == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/$GH_REPOSITORY/commits/main" --jq .sha)"
+          if [[ ! "$main_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "GitHub returned an invalid main commit SHA" >&2
+            exit 1
+          fi
+          echo "sha=$main_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify all latest required checks for the exact SHA
+        id: required
+        if: steps.event.outputs.accepted == 'true'
+        uses: ./.github/actions/verify-required-checks
+        with:
+          sha: ${{ steps.current-main.outputs.sha }}
+          token: ${{ github.token }}
+
+      - name: Set accepted validation output
+        id: accepted
+        if: steps.event.outputs.accepted == 'true' && steps.required.outputs.validated == 'true'
+        shell: bash
+        run: echo "accepted=true" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: validate
+    if: needs.validate.outputs.accepted == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      action: ${{ steps.plan.outputs.action }}
+      publish-main: ${{ steps.plan.outputs.publish_main }}
+      sha: ${{ needs.validate.outputs.sha }}
+    steps:
+      - name: Check out trusted default-branch release code
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+
+      - name: Reconcile tags and calculate release plan
+        id: plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.validate.outputs.sha }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git fetch --tags origin
+          remote_main_sha="$(gh api "repos/$GH_REPOSITORY/commits/main" --jq .sha)"
+          stable_tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          mapfile -t tags_at_sha < <(git tag --points-at "$TARGET_SHA" | grep -E "$stable_tag_pattern" | sort -V || true)
+          candidate_tag=""
+          candidate_sha=""
+          candidate_release="unknown"
+          next_tag=""
+
+          release_state() {
+            local tag="$1" response_file status
+            response_file="$(mktemp)"
+            status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$GH_REPOSITORY/releases/tags/$tag")"
+            case "$status" in
+              200)
+                jq -e 'has("draft") and (.draft | type == "boolean")' "$response_file" >/dev/null || { rm -f "$response_file"; return 2; }
+                if [[ "$(jq -r '.draft' "$response_file")" == "true" ]]; then
+                  candidate_release="draft"
+                else
+                  candidate_release="published"
+                fi
+                ;;
+              404) candidate_release="absent" ;;
+              *) rm -f "$response_file"; return 1 ;;
+            esac
+            rm -f "$response_file"
+          }
+
+          if (( ${#tags_at_sha[@]} > 0 )); then
+            candidate_tag="${tags_at_sha[${#tags_at_sha[@]}-1]}"
+            candidate_sha="$TARGET_SHA"
+            release_state "$candidate_tag"
+          else
+            if [[ "$remote_main_sha" != "$TARGET_SHA" ]]; then
+              plan="$(go run ./cmd/tusk-release automatic-plan \
+                --validated-sha "$TARGET_SHA" \
+                --remote-main-sha "$remote_main_sha")"
+              echo "action=$(sed -n 's/^action=//p' <<< "$plan")" >> "$GITHUB_OUTPUT"
+              echo "tag=$(sed -n 's/^tag=//p' <<< "$plan")" >> "$GITHUB_OUTPUT"
+              echo "publish_main=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            previous_tag="$(git tag --list 'v*' | grep -E "$stable_tag_pattern" | sort -V | tail -n 1 || true)"
+            if [[ -z "$previous_tag" ]]; then
+              echo "No previous stable tag exists; configure an initial stable version before enabling automation." >&2
+              exit 1
+            fi
+            calculation="$(go run ./cmd/tusk-release --previous-tag "$previous_tag" --target-commit "$TARGET_SHA")"
+            should_release="$(sed -n 's/^should_release=//p' <<< "$calculation")"
+            if [[ "$should_release" == "true" ]]; then
+              version="$(sed -n 's/^version=//p' <<< "$calculation")"
+              next_tag="v$version"
+              remote_tag="$(git ls-remote --tags origin "refs/tags/$next_tag" "refs/tags/$next_tag^{}")"
+              if [[ -n "$remote_tag" ]]; then
+                candidate_tag="$next_tag"
+                git fetch --no-tags origin "refs/tags/$candidate_tag:refs/tusk-release/$candidate_tag"
+                candidate_sha="$(git rev-parse "refs/tusk-release/$candidate_tag^{commit}")"
+                release_state "$candidate_tag"
+              fi
+            fi
+          fi
+
+          if [[ -n "$candidate_tag" && -n "$candidate_sha" ]]; then
+            next_tag=""
+          fi
+          plan="$(go run ./cmd/tusk-release automatic-plan \
+            --validated-sha "$TARGET_SHA" \
+            --remote-main-sha "$remote_main_sha" \
+            --next-tag "$next_tag" \
+            --candidate-tag "$candidate_tag" \
+            --candidate-tag-sha "$candidate_sha" \
+            --candidate-release "$candidate_release")"
+          action="$(sed -n 's/^action=//p' <<< "$plan")"
+          tag="$(sed -n 's/^tag=//p' <<< "$plan")"
+          publish_main=false
+          if [[ "$remote_main_sha" == "$TARGET_SHA" ]]; then publish_main=true; fi
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish_main=$publish_main" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight official catalog and signing configuration
+        if: steps.plan.outputs.action == 'create' || steps.plan.outputs.action == 'resume'
+        shell: bash
+        env:
+          TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}
+          TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}
+          TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$TUSK_CATALOG_SIGNING_KEY_B64"
+          test -n "$TUSK_CATALOG_KEY_ID"
+          test -n "$TUSK_CATALOG_TRUST_ANCHORS_B64"
+          go run ./cmd/tusk-catalog validate --download --payload release/toolchain-catalog.payload.json
+          go run ./cmd/tusk-catalog sign \
+            --payload release/toolchain-catalog.payload.json \
+            --catalog "$RUNNER_TEMP/preflight-catalog.json" \
+            --provenance "$RUNNER_TEMP/preflight-provenance.json"
+
+      - name: Create immutable annotated stable tag
+        if: steps.plan.outputs.action == 'create'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.plan.outputs.tag }}
+          TARGET_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          remote_main_sha="$(gh api "repos/$GH_REPOSITORY/commits/main" --jq .sha)"
+          if [[ "$remote_main_sha" != "$TARGET_SHA" ]]; then
+            echo "main advanced before tag creation; refusing to tag a stale commit" >&2
+            exit 1
+          fi
+          remote_tag="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+          if [[ -n "$remote_tag" ]]; then
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tusk-release/$RELEASE_TAG"
+            existing_sha="$(git rev-parse "refs/tusk-release/$RELEASE_TAG^{commit}")"
+            if [[ "$existing_sha" != "$TARGET_SHA" ]]; then
+              echo "release tag already exists for a different commit" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          git tag -a "$RELEASE_TAG" "$TARGET_SHA" -m "Tusk Engine $RELEASE_TAG"
+          if ! git push origin "refs/tags/$RELEASE_TAG"; then
+            remote_tag="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+            if [[ -z "$remote_tag" ]]; then
+              echo "could not publish the release tag" >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tusk-release/race-check"
+            raced_sha="$(git rev-parse 'refs/tusk-release/race-check^{commit}')"
+            if [[ "$raced_sha" != "$TARGET_SHA" ]]; then
+              echo "release tag was concurrently created for a different commit" >&2
+              exit 1
+            fi
+          fi
+
+  publish-release:
+    needs: release
+    if: needs.release.outputs.action == 'create' || needs.release.outputs.action == 'resume'
+    uses: ./.github/workflows/release.yml
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      expected-sha: ${{ needs.release.outputs.sha }}
+    secrets:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}
+      TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}
+      TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
+
+  publish-docker:
+    needs:
+      - validate
+      - release
+      - publish-release
+    if: >-
+      always() && needs.validate.outputs.accepted == 'true' && needs.release.result == 'success' &&
+      (needs.publish-release.result == 'success' || needs.publish-release.result == 'skipped') &&
+      (needs.release.outputs.publish-main == 'true' || needs.release.outputs.tag != '')
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      image-name: ghcr.io/${{ github.repository }}
+      source-ref: ${{ needs.release.outputs.sha }}
+      publish-main: ${{ needs.release.outputs.publish-main == 'true' }}
+      tags: ${{ needs.release.outputs.tag != '' && format('type=raw,value={0}', needs.release.outputs.tag) || '' }}

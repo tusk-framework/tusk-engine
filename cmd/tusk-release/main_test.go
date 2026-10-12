@@ -98,6 +98,38 @@ func TestRunValidateMessage(t *testing.T) {
 	}
 }
 
+func TestRunAutomaticPlan(t *testing.T) {
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const next = "v1.2.4"
+	tests := []struct {
+		name       string
+		args       []string
+		wantOutput string
+		wantErr    bool
+	}{
+		{name: "create", args: []string{"automatic-plan", "--validated-sha", sha, "--remote-main-sha", sha, "--next-tag", next}, wantOutput: "action=create\\ntag=v1.2.4\\n"},
+		{name: "resume draft", args: []string{"automatic-plan", "--validated-sha", sha, "--remote-main-sha", sha, "--candidate-tag", next, "--candidate-tag-sha", sha, "--candidate-release", "draft"}, wantOutput: "action=resume\\ntag=v1.2.4\\n"},
+		{name: "resume missing release", args: []string{"automatic-plan", "--validated-sha", sha, "--remote-main-sha", strings.Repeat("b", 40), "--candidate-tag", next, "--candidate-tag-sha", sha, "--candidate-release", "absent"}, wantOutput: "action=resume\\ntag=v1.2.4\\n"},
+		{name: "published is idempotent", args: []string{"automatic-plan", "--validated-sha", sha, "--remote-main-sha", strings.Repeat("b", 40), "--candidate-tag", next, "--candidate-tag-sha", sha, "--candidate-release", "published"}, wantOutput: "action=already-published\\ntag=v1.2.4\\n"},
+		{name: "skip stale", args: []string{"automatic-plan", "--validated-sha", sha, "--remote-main-sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "--next-tag", next}, wantOutput: "action=skip-stale\\ntag=\\n"},
+		{name: "no release", args: []string{"automatic-plan", "--validated-sha", sha, "--remote-main-sha", sha}, wantOutput: "action=no-version\\ntag=\\n"},
+		{name: "reject conflicting tag", args: []string{"automatic-plan", "--validated-sha", sha, "--remote-main-sha", sha, "--next-tag", next, "--candidate-tag", next, "--candidate-tag-sha", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "--candidate-release", "draft"}, wantOutput: "", wantErr: true},
+		{name: "reject unknown release state", args: []string{"automatic-plan", "--validated-sha", sha, "--remote-main-sha", sha, "--candidate-tag", next, "--candidate-tag-sha", sha, "--candidate-release", "pending"}, wantOutput: "", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			err := run(test.args, &stdout, nil)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("run() error = %v, wantErr %t", err, test.wantErr)
+			}
+			if got := strings.ReplaceAll(stdout.String(), "\n", "\\n"); got != test.wantOutput {
+				t.Errorf("stdout = %q, want %q", got, test.wantOutput)
+			}
+		})
+	}
+}
+
 func TestRunRejectsInvalidInputsBeforeGit(t *testing.T) {
 	tests := [][]string{
 		{"--previous-tag", "-x", "--target-commit", strings.Repeat("a", 40)},

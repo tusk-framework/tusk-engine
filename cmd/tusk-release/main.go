@@ -42,6 +42,9 @@ func run(args []string, stdout io.Writer, git gitRunner) error {
 		}
 		return release.ValidateConventionalCommit(*message)
 	}
+	if len(args) > 0 && args[0] == "automatic-plan" {
+		return runAutomaticPlan(args[1:], stdout)
+	}
 
 	flags := flag.NewFlagSet("tusk-release", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -70,6 +73,48 @@ func run(args []string, stdout io.Writer, git gitRunner) error {
 	}
 	outputLine := fmt.Sprintf("version=%s\nshould_release=%t\n", version, shouldRelease)
 	_, err = io.WriteString(stdout, outputLine)
+	return err
+}
+
+func runAutomaticPlan(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("automatic-plan", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	validatedSHA := flags.String("validated-sha", "", "validated source commit SHA")
+	remoteMainSHA := flags.String("remote-main-sha", "", "current remote main commit SHA")
+	nextTag := flags.String("next-tag", "", "calculated next stable tag, if a release is due")
+	candidateTag := flags.String("candidate-tag", "", "existing tag to reconcile")
+	candidateTagSHA := flags.String("candidate-tag-sha", "", "commit resolved by the existing candidate tag")
+	candidateRelease := flags.String("candidate-release", "unknown", "existing release state: unknown, absent, draft, or published")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("invalid arguments: %w", err)
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	state := release.ReleaseUnknown
+	switch *candidateRelease {
+	case "unknown":
+	case "absent":
+		state = release.ReleaseAbsent
+	case "draft":
+		state = release.ReleaseDraft
+	case "published":
+		state = release.ReleasePublished
+	default:
+		return errors.New("invalid candidate release state")
+	}
+	plan := release.PlanAutomaticRelease(release.ReleasePlanInput{
+		ValidatedSHA:     *validatedSHA,
+		RemoteMainSHA:    *remoteMainSHA,
+		NextTag:          *nextTag,
+		CandidateTag:     *candidateTag,
+		CandidateTagSHA:  *candidateTagSHA,
+		CandidateRelease: state,
+	})
+	if plan.Action == release.ReleaseConflict {
+		return errors.New("release tag state conflicts with the validated commit")
+	}
+	_, err := fmt.Fprintf(stdout, "action=%s\ntag=%s\n", plan.Action, plan.Tag)
 	return err
 }
 

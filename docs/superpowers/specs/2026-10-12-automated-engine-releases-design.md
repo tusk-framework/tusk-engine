@@ -7,7 +7,9 @@ the current `.github/workflows/release.yml` only runs after a `v*` tag is
 pushed. The main-branch workflows validate Go build/tests/vet, Docker build,
 and the generated application skeleton. This leaves version calculation and
 tag creation as a manual gap between a green `main` and the signed GoReleaser
-publication.
+publication. The tag-triggered publisher is not a safe trust boundary because
+it executes workflow code from the tag ref; the replacement uses a trusted
+default-branch `workflow_run` orchestrator.
 
 The existing release pipeline validates the official toolchain catalog,
 signs and verifies it, creates GitHub attestations for the catalog and its
@@ -78,9 +80,12 @@ The main-branch release orchestrator must gate on successful Go
 build/test/vet, Docker build validation, and Skeleton smoke runs for the same
 `main` commit. These checks currently live in separate workflows, so the
 orchestrator must aggregate their completed workflow runs by exact head SHA;
-it must not assume GitHub Actions `needs` can refer across workflows. It must
-verify each run belongs to this repository, was triggered by a push to
-`main`, targets the candidate SHA, and concluded successfully. The Docker job
+it must not assume GitHub Actions `needs` can refer across workflows. A
+completed workflow_run is only a wake-up signal: after validating that it is a
+same-repository successful push to `main`, the orchestrator resolves the
+current `main` SHA and verifies all latest required runs for that exact SHA.
+This makes a delayed event safe even if a newer main push superseded it in the
+Actions concurrency queue. The Docker job
 currently also pushes the mutable `main` image on every main push; that image
 push is not a release gate and must not be mistaken for validation. Immutable
 versioned image publication, if included in this release, must use the
@@ -125,7 +130,7 @@ need it; it must never be printed or persisted as an artifact.
 - Allow at most one automatic release job for this repository at a time; do
   not cancel an in-progress release in favor of a newer push.
 - Before tag creation, re-check the remote tag and current `main` SHA to handle
-  queued runs and manual tag races. If `main` advanced while this run waited,
+  queued runs and external tag races. If `main` advanced while this run waited,
   do not release a stale commit; the newest successful main run can calculate
   the accumulated range.
 - A pre-existing target tag is a hard error unless the run is an intentional

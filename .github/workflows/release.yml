@@ -4,7 +4,11 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: Existing stable release tag to publish
+        description: Stable release tag to publish
+        required: true
+        type: string
+      expected-sha:
+        description: Exact validated source commit for the release tag
         required: true
         type: string
     secrets:
@@ -27,20 +31,22 @@ jobs:
       actions: read
       contents: read
     outputs:
-      matches: ${{ steps.main.outputs.matches }}
-      sha: ${{ steps.main.outputs.sha }}
+      matches: ${{ steps.tag.outputs.matches }}
+      sha: ${{ steps.tag.outputs.sha }}
       validated: ${{ steps.checks.outputs.validated }}
     steps:
       - name: Checkout workflow source
         uses: actions/checkout@v5
         with:
+          ref: main
           fetch-depth: 0
-      - name: Verify tag resolves to current main
-        id: main
+      - name: Verify tag resolves to expected validated commit
+        id: tag
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.expected-sha }}
         run: |
           set -euo pipefail
           if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -49,30 +55,33 @@ jobs:
           fi
           git fetch --no-tags origin "refs/tags/$TAG:refs/task4/$TAG"
           tag_sha="$(git rev-parse "refs/task4/$TAG^{commit}")"
-          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-          if [[ "$tag_sha" == "$main_sha" ]]; then
+          if [[ ! "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Expected source SHA must be a full lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          if [[ "$tag_sha" == "$EXPECTED_SHA" ]]; then
             echo "matches=true" >> "$GITHUB_OUTPUT"
             echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
           else
             echo "matches=false" >> "$GITHUB_OUTPUT"
             echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
-            echo "Stable tag does not point to the current main commit" >&2
+            echo "Stable tag does not point to the expected validated commit" >&2
             exit 1
           fi
       - name: Check required main runs for exact source SHA
         id: checks
         uses: ./.github/actions/verify-required-checks
         with:
-          sha: ${{ steps.main.outputs.sha }}
+          sha: ${{ steps.tag.outputs.sha }}
           token: ${{ github.token }}
       - name: Fail when required main checks have not passed
-        if: always() && steps.main.outputs.matches == 'true' && (steps.checks.outcome == 'failure' || steps.checks.outputs.validated != 'true')
+        if: always() && steps.tag.outputs.matches == 'true' && (steps.checks.outcome == 'failure' || steps.checks.outputs.validated != 'true')
         shell: bash
         run: |
           echo "Required main push checks are missing, pending, or unsuccessful for this commit" >&2
           exit 1
-      - name: Fail when tag does not point to current main
-        if: always() && steps.main.outcome == 'failure'
+      - name: Fail when tag does not point to expected commit
+        if: always() && steps.tag.outcome == 'failure'
         shell: bash
         run: |
           echo "Stable tag does not point to the current main commit or could not be resolved" >&2
@@ -89,6 +98,8 @@ jobs:
     steps:
       - name: Checkout repository for local publication action
         uses: actions/checkout@v5
+        with:
+          ref: main
       - name: Publish exact stable tag
         uses: ./.github/actions/publish-release
         with:

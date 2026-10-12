@@ -133,6 +133,14 @@ func TestReleaseWorkflowUsesTrustedCallerAndProtectsPublishedReleases(t *testing
 	if !strings.Contains(workflow, "workflow_call:") {
 		t.Fatal("release workflow must only be callable by a trusted workflow")
 	}
+	for _, expected := range []string{"expected-sha:", "EXPECTED_SHA: ${{ inputs.expected-sha }}", "ref: main"} {
+		if !strings.Contains(workflow, expected) {
+			t.Errorf("reusable publisher is missing exact source/trusted code contract %q", expected)
+		}
+	}
+	if strings.Contains(workflow, "/commits/main") {
+		t.Fatal("reusable publisher must permit a safe retry for an already-tagged SHA after main advances")
+	}
 	for _, expected := range []string{
 		"Guard already-published release",
 		"if [[ -z \"$GH_TOKEN\" ]]",
@@ -149,6 +157,50 @@ func TestReleaseWorkflowUsesTrustedCallerAndProtectsPublishedReleases(t *testing
 	}
 	if strings.Index(action, "Guard already-published release") > strings.Index(action, "go run ./cmd/tusk-catalog sign") {
 		t.Fatal("published-release guard must run before signing")
+	}
+}
+
+func TestAutomaticReleaseWorkflowGatesMutationAndPinsDockerSource(t *testing.T) {
+	root := repositoryRoot(t)
+	workflow := readRepositoryFile(t, root, ".github", "workflows", "automatic-release.yml")
+	docker := readRepositoryFile(t, root, ".github", "workflows", "docker-publish.yml")
+	for _, expected := range []string{
+		"workflow_run:",
+		"- Go",
+		"- Docker validation",
+		"- Skeleton smoke",
+		"cancel-in-progress: false",
+		"HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}",
+		"EVENT_NAME: ${{ github.event.workflow_run.event }}",
+		"HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}",
+		"Resolve current main as the release candidate",
+		"repos/$GH_REPOSITORY/commits/main",
+		"sha: ${{ steps.current-main.outputs.sha }}",
+		"ref: main",
+		"uses: ./.github/actions/verify-required-checks",
+		"git tag -a",
+		"git push origin",
+		"Preflight official catalog and signing configuration",
+		"uses: ./.github/workflows/release.yml",
+		"uses: ./.github/workflows/docker-publish.yml",
+		"source-ref: ${{ needs.release.outputs.sha }}",
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Errorf("automatic release workflow is missing contract %q", expected)
+		}
+	}
+	if strings.Contains(workflow, "git push --force") || strings.Contains(workflow, "git push -f ") {
+		t.Fatal("automatic release workflow must never force-update a stable tag")
+	}
+	preflight := strings.Index(workflow, "Preflight official catalog and signing configuration")
+	tagCreation := strings.Index(workflow, "Create immutable annotated stable tag")
+	if preflight < 0 || tagCreation < 0 || preflight > tagCreation {
+		t.Fatal("release prerequisites must be checked before creating the immutable tag")
+	}
+	for _, expected := range []string{"source-ref:", "publish-main:", "ref: ${{ inputs.source-ref }}", "Recheck current main for mutable main tag", "steps.current-main.outputs.publish == 'true'", "type=raw,value=main"} {
+		if !strings.Contains(docker, expected) {
+			t.Errorf("Docker publisher is missing exact-source contract %q", expected)
+		}
 	}
 }
 

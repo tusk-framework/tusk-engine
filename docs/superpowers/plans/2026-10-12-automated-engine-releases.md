@@ -24,7 +24,7 @@
 
 - Squash-merge title and resulting commit subject differ — test the actual GitHub squash metadata contract and fail closed if release information is lost.
 - Breaking notation, malformed footers, and mixed release levels — pin parser results and precedence using table-driven Go tests.
-- A queued workflow observes a newer `main` or a competing manual tag — test stale-SHA and existing-tag decisions before mutation.
+- A queued workflow observes a newer `main` or a competing external tag — test stale-SHA and existing-tag decisions before mutation.
 - Failure occurs after tag creation but before GoReleaser completes — test retry behavior that keeps the tag immutable and avoids duplicate assets/releases.
 - Docker validation succeeds while mutable image publication fails (or vice versa) — test that release gating depends on validation, not the mutable image side effect.
 
@@ -73,6 +73,7 @@
 - Modify: `.github/workflows/go.yml`
 - Modify: `.github/workflows/test.yml`
 - Modify: `.github/workflows/docker-publish.yml`
+- Modify: `.github/workflows/release.yml`
 - Modify: `internal/release/version.go`
 - Modify: `internal/release/version_test.go`
 - Modify: `cmd/tusk-release/main.go`
@@ -118,23 +119,27 @@
 
 **Files:**
 - Create: `.github/workflows/automatic-release.yml`
+- Create: `internal/release/orchestrator.go`
+- Create: `internal/release/orchestrator_test.go`
+- Modify: `cmd/tusk-release/main.go`
+- Modify: `cmd/tusk-release/main_test.go`
 - Modify: `.github/workflows/docker-publish.yml`
-- Modify: `.github/actions/publish-release/action.yml`
-- Modify: `.github/actions/verify-required-checks/action.yml`
-- Modify: `.github/workflows/docker-publish.yml`
+- Modify: `.github/workflows/release.yml`
+- Modify: `internal/toolchain/release_workflow_test.go`
+- Modify: the design specification to capture final event/trust semantics
 
 **Interfaces:**
 - Consumes: `workflow_run` events; Task 4 shared verifier output proving successful required Go, Docker validation, and Skeleton smoke runs for one immutable main SHA; Task 2 CLI output; Task 4 local composite publisher.
 - Produces: at most one immutable `vMAJOR.MINOR.PATCH` tag and matching GitHub release for that validated SHA; mutable `main` image and optional versioned Docker image only after all required checks succeed for the same SHA.
 
-- [ ] **Step 1: Add orchestration contract tests/scripts** for no release, successful release, `main` advancing while queued, tag collision, already-published release, existing same-SHA tag with incomplete draft, and retry after partial publication.
+- [ ] **Step 1: Add orchestration contract tests/scripts** for no release, successful release, `main` advancing while queued, tag collision, already-published release, existing same-SHA tag with incomplete draft, and retry after partial publication. Model candidate selection separately from mutation, including retry when the same SHA is already tagged and is now the latest stable tag.
 - [ ] **Step 2: Run those tests** and confirm the stale-SHA/tag-race cases fail before workflow implementation.
-- [ ] **Step 3: Add a `workflow_run` aggregator** for Go, Docker validation, and Skeleton smoke. Accept only same-repository `push` runs on `main`; call Task 4's verifier for the exact event SHA and proceed only when all required runs succeeded. Serialize release jobs (`cancel-in-progress: false`), keep calculation read-only, and scope tag/release mutation to a job with `contents: write`.
-- [ ] **Step 4: Reconcile an existing candidate tag before calculating a new version.** If it points to the event SHA, resume that tag's draft publication (the shared publisher safely no-ops if already published); if it points elsewhere, fail without mutation. For a new tag, re-fetch remote tags and `main`, skip stale runs, and fail on a conflicting target tag.
-- [ ] **Step 5: Create an annotated version tag at the exact tested SHA** and call the shared publisher within the same workflow run, without relying on tag push to trigger Actions.
+- [ ] **Step 3: Add a trusted `workflow_run` aggregator** for Go, Docker validation, and Skeleton smoke. Accept only same-repository successful `push` runs on `main` as wake-up signals; resolve current remote `main`, then call Task 4's verifier for that exact SHA. This handles replaced pending events without losing a green latest commit. Never checkout or execute the triggering commit/ref. Serialize release jobs (`cancel-in-progress: false`), keep calculation read-only, and scope tag/release mutation to a job with `contents: write`.
+- [ ] **Step 4: Reconcile an existing candidate tag before calculating a new version.** If it points to the current-main candidate SHA, resume that tag's draft publication (the shared publisher safely no-ops if already published); if it points elsewhere, fail without mutation. For a new tag, re-fetch remote tags and `main`, skip stale candidates, and fail on a conflicting target tag.
+- [ ] **Step 5: Create an annotated version tag at the exact validated current-main SHA** and call the shared publisher within the same workflow run, without relying on tag push to trigger Actions.
 - [ ] **Step 6: Implement retry rules**: same tag + same SHA + incomplete draft can resume idempotently; an already-published release is a no-op; different SHA or conflicting assets fail without mutation. Never calculate the next version from a range that omits an already-created candidate tag for this same SHA.
 - [ ] **Step 7: Publish Docker image tag `v<version>` from the same validated SHA** after version calculation; preserve mutable `main` image behavior separately and prevent it from satisfying validation dependencies.
-- [ ] **Step 8: Preflight release prerequisites before creating a new immutable tag**, including catalog payload download validation and presence of signing/trust-anchor configuration; fail before the tag if required setup is missing. Call the reusable Docker publisher only after all required validation succeeds, publishing `main` even when semantic version calculation reports no release, and publishing both `main` and `v<version>` when a release is due.
+- [ ] **Step 8: Preflight release prerequisites before creating a new immutable tag**, including catalog payload download validation and presence of signing/trust-anchor configuration; fail before the tag if required setup is missing. Call the reusable Docker publisher only after all required validation succeeds, publishing `main` even when semantic version calculation reports no release, and publishing both `main` and `v<version>` when a release is due. Ensure the reusable workflow checks out the exact validated source SHA, not whichever branch is current at job start.
 - [ ] **Step 9: Validate action graph/YAML and run all Go tests**; assert each acceptance criterion has a corresponding workflow/test check.
 - [ ] **Step 10: Commit** as `feat: publish engine releases after successful main checks`.
 
@@ -151,7 +156,7 @@
 
 - [ ] **Step 1: Add documentation checks** for every policy and recovery case in the spec, including that no PAT is needed and secrets remain unprinted.
 - [ ] **Step 2: Run documentation tests/link checks** and verify they fail if release policy/recovery sections are absent.
-- [ ] **Step 3: Document automatic release behavior** and update README/manual release guidance to distinguish normal automatic releases from explicit stable-tag recovery.
+- [ ] **Step 3: Document automatic release behavior** and update README/manual release guidance to explain automatic retries through the trusted aggregator; direct tag/dispatch publication is intentionally unsupported.
 - [ ] **Step 4: Review workflows and docs together** against all 13 acceptance criteria in the spec; record any criterion that cannot be exercised without GitHub-hosted integration as a manual validation step.
 - [ ] **Step 5: Run `go test ./...`, `go vet ./...`, workflow YAML lint, and `goreleaser check`** with pinned/local tooling as available.
 - [ ] **Step 6: Commit** as `docs: explain automated engine release lifecycle`.
