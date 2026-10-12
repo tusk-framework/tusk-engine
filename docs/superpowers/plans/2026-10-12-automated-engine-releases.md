@@ -96,7 +96,6 @@
 **Files:**
 - Modify: `.github/workflows/release.yml`
 - Create: `.github/actions/publish-release/action.yml` (local composite action)
-- Modify: `.goreleaser.yaml`
 
 **Interfaces:**
 - Produces: shared composite publication action accepting an immutable version tag and expected source SHA, validating both, then running the existing signed catalog and GoReleaser sequence exactly once.
