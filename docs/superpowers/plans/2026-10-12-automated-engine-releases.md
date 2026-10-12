@@ -96,20 +96,23 @@
 **Files:**
 - Modify: `.github/workflows/release.yml`
 - Create: `.github/actions/publish-release/action.yml` (local composite action)
+- Create: `.github/actions/verify-required-checks/action.yml` (local composite action)
 - Modify: `.goreleaser.yaml`
 
 **Interfaces:**
 - Produces: shared composite publication action accepting an immutable version tag and expected source SHA, validating both, then running the existing signed catalog and GoReleaser sequence exactly once.
+- Produces: shared required-check verifier that reports true only when Go, Docker validation, and Skeleton smoke have successful `push` runs on `main` for the exact SHA; it uses read-only Actions API access and is shared by the manual-tag caller and automatic aggregator.
 - Consumes: tag/version and SHA from either the automatic main orchestrator or an explicitly supported manual stable-tag invocation; signing credentials are passed only through caller step environment and never as logged inputs.
 
 - [ ] **Step 1: Capture existing release contract** in checks for signed catalog, provenance, checksums, attestations, and exact binary version/digest.
 - [ ] **Step 2: Run current release validation tests/checks** to establish the baseline and inspect GoReleaser config behavior for exact tags.
-- [ ] **Step 3: Extract the current signed release steps** into a local composite action with stable-tag validation, expected-SHA verification, Go 1.23, and pinned GoReleaser CLI v2.18.3/action v7.2.3 (`f06c13b6b1a9625abc9e6e439d9c05a8f2190e94`).
-- [ ] **Step 4: Configure safe GoReleaser retry behavior** with `preflight.fail_on_error: true`, `use_existing_draft: true`, and `replace_existing_artifacts: true`; retries may reuse an incomplete draft for the same tag/SHA, but must not alter a published release.
-- [ ] **Step 5: Keep tag-triggered compatibility/manual publishing** as a thin caller of the composite action, rejecting non-stable tags and never moving tags; scope token/OIDC/attestation permissions to the caller's publication job.
-- [ ] **Step 6: Add workflow-level validation** that missing signing inputs, invalid payload, mismatched SHA, or wrong tag fail before publication.
-- [ ] **Step 7: Validate workflow YAML and GoReleaser configuration**; confirm existing release assets and trust chain are preserved.
-- [ ] **Step 8: Commit** as `refactor: share exact-tag signed release publication`.
+- [ ] **Step 3: Create `verify-required-checks`** that accepts a SHA, queries only same-repository Actions runs, and emits `validated=true` only when the latest `push` runs named `Go`, `Docker validation`, and `Skeleton smoke` all have `head_branch=main`, matching SHA, `status=completed`, and `conclusion=success`; absent/running/failed checks emit false, API errors fail.
+- [ ] **Step 4: Extract the signed release steps** into a local composite action with stable-tag validation, expected-SHA verification, Go 1.23, and pinned GoReleaser CLI v2.18.3/action v7.2.3 (`f06c13b6b1a9625abc9e6e439d9c05a8f2190e94`).
+- [ ] **Step 5: Configure safe GoReleaser retry behavior** with `preflight.fail_on_error: true`, `use_existing_draft: true`, and `replace_existing_artifacts: true`; retries may reuse an incomplete draft for the same tag/SHA, but must not alter a published release.
+- [ ] **Step 6: Gate tag-triggered compatibility/manual publishing** on stable tag, tag SHA equal to current `main`, and `verify-required-checks=true`; never move tags. Scope actions-read permission to validation and contents/OIDC/attestation permissions to the publication job.
+- [ ] **Step 7: Add workflow-level validation** that missing signing inputs, invalid payload, mismatched SHA, or wrong tag fail before publication.
+- [ ] **Step 8: Validate workflow YAML and GoReleaser configuration**; confirm existing release assets and trust chain are preserved.
+- [ ] **Step 9: Commit** as `refactor: share exact-tag signed release publication`.
 
 ### Task 5: Serialized automatic main release orchestrator
 
@@ -119,12 +122,12 @@
 - Modify: `.github/workflows/publish-release.yml`
 
 **Interfaces:**
-- Consumes: `workflow_run` events and API results proving successful required Go, Docker validation, and Skeleton smoke runs for one immutable main SHA; Task 2 CLI output; Task 4 local composite publisher.
+- Consumes: `workflow_run` events; Task 4 shared verifier output proving successful required Go, Docker validation, and Skeleton smoke runs for one immutable main SHA; Task 2 CLI output; Task 4 local composite publisher.
 - Produces: at most one immutable `vMAJOR.MINOR.PATCH` tag and matching GitHub release for that validated SHA; mutable `main` image and optional versioned Docker image only after all required checks succeed for the same SHA.
 
 - [ ] **Step 1: Add orchestration contract tests/scripts** for no release, successful release, `main` advancing while queued, tag collision, already-complete release, and retry after partial publication.
 - [ ] **Step 2: Run those tests** and confirm the stale-SHA/tag-race cases fail before workflow implementation.
-- [ ] **Step 3: Add a `workflow_run` aggregator** for Go, Docker validation, and Skeleton smoke. Accept only same-repository `push` runs on `main`; query all required workflow runs for the exact head SHA and proceed only when each has a successful conclusion. Serialize release runs (`cancel-in-progress: false`), keep calculation read-only, and scope mutation/publication to a job with `contents: write`.
+- [ ] **Step 3: Add a `workflow_run` aggregator** for Go, Docker validation, and Skeleton smoke. Accept only same-repository `push` runs on `main`; call Task 4's verifier for the exact event SHA and proceed only when all required runs succeeded. Serialize release jobs (`cancel-in-progress: false`), keep calculation read-only, and scope tag/release mutation to a job with `contents: write`.
 - [ ] **Step 4: Before tag mutation, re-fetch remote tags and `main`;** skip stale runs if SHA changed, skip cleanly when no release is due, and fail on conflicting target tags.
 - [ ] **Step 5: Create an annotated version tag at the exact tested SHA** and call the shared publisher within the same workflow run, without relying on tag push to trigger Actions.
 - [ ] **Step 6: Implement retry rules**: same tag + same SHA + incomplete release can resume idempotently; completed releases exit successfully; different SHA or conflicting assets fail without mutation.
