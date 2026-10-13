@@ -370,6 +370,8 @@ jobs:
             fi
             exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$RELEASE_TAG" "$TARGET_SHA" \
             -m "Tusk Engine $RELEASE_TAG" \
             -m "tusk-release-automation:v1" \
