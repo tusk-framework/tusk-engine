@@ -162,8 +162,8 @@ func TestReleaseWorkflowUsesTrustedCallerAndProtectsPublishedReleases(t *testing
 
 func TestAutomaticReleaseWorkflowGatesMutationAndPinsDockerSource(t *testing.T) {
 	root := repositoryRoot(t)
-	workflow := readRepositoryFile(t, root, ".github", "workflows", "automatic-release.yml")
-	docker := readRepositoryFile(t, root, ".github", "workflows", "docker-publish.yml")
+	workflow := strings.ReplaceAll(readRepositoryFile(t, root, ".github", "workflows", "automatic-release.yml"), "\r\n", "\n")
+	docker := strings.ReplaceAll(readRepositoryFile(t, root, ".github", "workflows", "docker-publish.yml"), "\r\n", "\n")
 	for _, expected := range []string{
 		"workflow_run:",
 		"branches:\n      - main",
@@ -241,7 +241,7 @@ func TestAutomaticReleaseWorkflowGatesMutationAndPinsDockerSource(t *testing.T) 
 	if preflight < 0 || tagCreation < 0 || preflight > tagCreation {
 		t.Fatal("release prerequisites must be checked before creating the immutable tag")
 	}
-	for _, expected := range []string{"source-ref:", "publish-main:", "ref: ${{ inputs.source-ref }}", "Recheck current main for mutable main tag", "Preserve existing immutable version image tags", "org.opencontainers.image.revision", "context: git", "steps.current-main.outputs.publish == 'true'", "type=raw,value=main"} {
+	for _, expected := range []string{"source-ref:", "publish-main:", "ref: ${{ inputs.source-ref }}", "Recheck current main for mutable main tag", "Preserve existing immutable version image tags", "org.opencontainers.image.revision=${{ inputs.source-ref }}", "context: workflow", "steps.current-main.outputs.publish == 'true'", "type=raw,value=main"} {
 		if !strings.Contains(docker, expected) {
 			t.Errorf("Docker publisher is missing exact-source contract %q", expected)
 		}
