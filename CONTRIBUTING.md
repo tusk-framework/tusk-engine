@@ -99,6 +99,15 @@ release versioning:
 - `docs:`, `test:`, `chore:`, and similar non-release commits do not create a
   release by themselves.
 
+Pull request titles are validated as Conventional Commits. When a pull request
+is squash-merged, its validated title becomes the commit message used for
+release calculation. With a regular merge commit, every included non-merge
+commit must have a valid Conventional Commit message; the release calculator
+ignores the synthetic merge wrapper and evaluates those individual commits.
+Mark a breaking change with `!` before the colon (for example,
+`feat(api)!: replace the public API`) or include a non-empty `BREAKING CHANGE:`
+footer in the commit body.
+
 Use an imperative, specific subject, for example:
 
 ```text
@@ -150,8 +159,19 @@ area has existing style violations, keep the scope explicit and document it.
 ## Release and catalog changes
 
 Release automation is driven by Conventional Commits and publishes only after
-the required main-branch checks pass. Do not create or move release tags by
-hand unless a maintainer has asked you to perform a release operation.
+the latest Go, Docker validation, and Skeleton smoke checks pass for the same
+current `main` SHA. The trusted workflow calculates the version, creates an
+annotated immutable tag, signs and attests the catalog, and publishes the
+release and Docker image from that validated commit. See the offline
+[release automation guide](docs/user-guide/release-automation.md) for the
+version policy, required checks, and recovery procedure.
+
+Do not create, move, or push stable release tags to trigger publication, and
+do not dispatch the reusable publisher directly. After fixing a release
+prerequisite or a transient publish failure, rerun one of the required
+validation workflows for the relevant `main` commit; the trusted aggregator
+reconciles an existing same-SHA tag and draft without moving tags or mutating a
+published release.
 
 Catalog changes must include:
 

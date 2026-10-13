@@ -76,10 +76,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development environment,
 project boundaries, test commands, Conventional Commits, and pull request
 expectations. Community participation follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-Engine releases are published from versioned Git tags after the required CI
-checks pass. Catalog signing credentials remain in GitHub Actions secrets and
-public trust anchors remain repository variables; private signing material is
-never committed to this repository.
+Engine releases are versioned and published automatically after the latest Go,
+Docker validation, and Skeleton smoke checks pass for the current `main` SHA.
+The trusted release workflow creates the immutable version tag, signs and
+attests release metadata, and publishes matching artifacts. See the
+[release automation guide](docs/user-guide/release-automation.md) for version
+policy, outputs, and safe recovery. Catalog signing credentials remain in
+GitHub Actions secrets and public trust anchors remain repository variables;
+private signing material is never committed to this repository.
 
 ## Manual Build
 ```bash

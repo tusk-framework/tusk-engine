@@ -26,6 +26,7 @@ application. `tusk start` does not download or install tools implicitly.
 - [Catalog, artifact, and supply-chain security](security.md)
 - [CI and Docker profiles](ci-docker.md)
 - [Upgrading projects and the Engine](upgrading.md)
+- [Release automation and recovery](release-automation.md)
 
 Read any guide without a network connection using `tusk docs <topic>`, for
 example `tusk docs runtime`.

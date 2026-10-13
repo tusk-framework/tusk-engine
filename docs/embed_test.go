@@ -15,6 +15,7 @@ func TestUserGuideContainsEveryPublishedTopic(t *testing.T) {
 		"user-guide/security.md",
 		"user-guide/ci-docker.md",
 		"user-guide/upgrading.md",
+		"user-guide/release-automation.md",
 	}
 	for _, path := range want {
 		if _, err := fs.Stat(UserGuide, path); err != nil {

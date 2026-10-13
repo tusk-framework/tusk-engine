@@ -1,51 +1,153 @@
-name: Docker
+name: Docker image publication
 
 on:
-  push:
-    branches: [ "main" ]
-    tags: [ 'v*.*.*' ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_call:
+    inputs:
+      image-name:
+        description: Fully qualified image name, for example ghcr.io/owner/repository
+        required: true
+        type: string
+      tags:
+        description: Optional newline-separated immutable stable image tags
+        required: false
+        type: string
+        default: ''
+      source-ref:
+        description: Exact validated source commit to build
+        required: true
+        type: string
+      publish-main:
+        description: Whether to publish the mutable main tag for this validated commit
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
+  publish-main:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      id-token: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source-ref }}
+
+      - name: Recheck current main for mutable main tag
+        id: current-main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ inputs.source-ref }}
+          REQUEST_MAIN: ${{ inputs.publish-main }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUEST_MAIN" != "true" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          main_sha="$(gh api "repos/$GH_REPOSITORY/commits/main" --jq .sha)"
+          if [[ "$main_sha" == "$SOURCE_REF" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "main advanced; publishing only immutable version tags for the validated source"
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Log into registry ${{ env.REGISTRY }}
-        if: github.event_name != 'pull_request'
+      - name: Log into registry
+        if: inputs.publish-main || inputs.tags != ''
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Preserve existing immutable version image tags
+        id: immutable-tags
+        shell: bash
+        env:
+          IMAGE: ${{ inputs.image-name }}
+          SOURCE_REF: ${{ inputs.source-ref }}
+          REQUESTED_TAGS: ${{ inputs.tags }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$IMAGE" =~ ^ghcr\.io/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "Image name must be a fully qualified GHCR owner/repository name" >&2
+            exit 1
+          fi
+          assert_image_source_revision() {
+            local image_ref="$1" raw_manifest platform image_revision
+            raw_manifest="$(docker buildx imagetools inspect --raw "$image_ref")" || return 1
+            if jq -e '.manifests | type == "array"' <<< "$raw_manifest" >/dev/null; then
+              mapfile -t platforms < <(jq -r '.manifests[]? | select(.platform.os != null and .platform.architecture != null and .platform.os != "unknown") | "\(.platform.os)/\(.platform.architecture)\(if (.platform.variant // "") == "" then "" else "/" + .platform.variant end)"' <<< "$raw_manifest" | sort -u)
+              if (( ${#platforms[@]} == 0 )); then return 1; fi
+              for platform in "${platforms[@]}"; do
+                docker pull --platform "$platform" "$image_ref" >/dev/null || return 1
+                image_revision="$(docker image inspect "$image_ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" || return 1
+                [[ "$image_revision" == "$SOURCE_REF" ]] || return 2
+              done
+              return 0
+            fi
+            docker pull "$image_ref" >/dev/null || return 1
+            image_revision="$(docker image inspect "$image_ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" || return 1
+            [[ "$image_revision" == "$SOURCE_REF" ]]
+          }
+          publish_tags=""
+          while IFS= read -r tag_spec; do
+            [[ -z "$tag_spec" ]] && continue
+            if [[ ! "$tag_spec" =~ ^type=raw,value=(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
+              echo "Only stable version tags may be supplied as immutable image tags" >&2
+              exit 1
+            fi
+            version_tag="${BASH_REMATCH[1]}"
+            if inspect_output="$(docker buildx imagetools inspect "$IMAGE:$version_tag" 2>&1)"; then
+              if ! assert_image_source_revision "$IMAGE:$version_tag"; then
+                echo "Existing immutable image $version_tag does not match the validated source SHA on every platform or could not be verified" >&2
+                exit 1
+              fi
+              echo "Preserving existing $version_tag image for the same source SHA on every platform."
+            elif grep -Eiq 'manifest unknown|no such manifest|not found|404|no such image' <<< "$inspect_output" && \
+                 ! grep -Eiq 'unauthorized|denied|forbidden|authentication required|permission denied' <<< "$inspect_output"; then
+              publish_tags+="$tag_spec"$'\n'
+            else
+              echo "Could not safely inspect immutable image $version_tag: $inspect_output" >&2
+              exit 1
+            fi
+          done <<< "$REQUESTED_TAGS"
+          {
+            echo 'tags<<TUSK_IMMUTABLE_TAGS'
+            printf '%s' "$publish_tags"
+            echo
+            echo 'TUSK_IMMUTABLE_TAGS'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          context: git
+          images: ${{ inputs.image-name }}
+          tags: |
+            ${{ steps.current-main.outputs.publish == 'true' && 'type=raw,value=main' || '' }}
+            ${{ steps.immutable-tags.outputs.tags }}
 
-      - name: Build and push Docker image
-        id: build-and-push
+      - name: Build and push mutable main image
         uses: docker/build-push-action@v7
+        if: steps.meta.outputs.tags != ''
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

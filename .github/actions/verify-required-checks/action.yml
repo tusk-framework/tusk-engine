@@ -1,0 +1,52 @@
+name: Verify required main checks
+description: Confirm the latest same-repository push runs for a commit passed all required main checks.
+inputs:
+  sha:
+    description: Full source commit SHA to validate.
+    required: true
+  token:
+    description: Read-only Actions API token supplied by the caller.
+    required: true
+outputs:
+  validated:
+    description: True only when all required checks passed for this SHA on main.
+    value: ${{ steps.verify.outputs.validated }}
+runs:
+  using: composite
+  steps:
+    - name: Verify latest required push runs
+      id: verify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TARGET_SHA: ${{ inputs.sha }}
+        GH_REPOSITORY: ${{ github.repository }}
+        GH_PAGER: cat
+      run: |
+        set -euo pipefail
+        if [[ ! "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+          echo "sha must be a full lowercase 40-character commit SHA" >&2
+          exit 1
+        fi
+        if [[ -z "$GH_TOKEN" ]]; then
+          echo "Actions API token is required" >&2
+          exit 1
+        fi
+        runs_json="$(gh api --paginate --slurp \
+          "repos/$GH_REPOSITORY/actions/runs?event=push&head_sha=$TARGET_SHA&per_page=100")"
+        validated=true
+        for required_name in "Go" "Docker validation" "Skeleton smoke"; do
+          run="$(jq -c --arg name "$required_name" --arg sha "$TARGET_SHA" \
+            '[.[] | .workflow_runs[] | select(.name == $name and .event == "push" and .head_branch == "main" and .head_sha == $sha)] | sort_by(.run_number) | last // empty' \
+            <<< "$runs_json")"
+          if [[ -z "$run" ]]; then
+            validated=false
+            continue
+          fi
+          status="$(jq -r '.status' <<< "$run")"
+          conclusion="$(jq -r '.conclusion // ""' <<< "$run")"
+          if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+            validated=false
+          fi
+        done
+        echo "validated=$validated" >> "$GITHUB_OUTPUT"
