@@ -82,10 +82,12 @@ build/test/vet, Docker build validation, and Skeleton smoke runs for the same
 orchestrator must aggregate their completed workflow runs by exact head SHA;
 it must not assume GitHub Actions `needs` can refer across workflows. A
 completed workflow_run is only a wake-up signal: after validating that it is a
-same-repository successful push to `main`, the orchestrator resolves the
-current `main` SHA and verifies all latest required runs for that exact SHA.
-This makes a delayed event safe even if a newer main push superseded it in the
-Actions concurrency queue. The Docker job
+same-repository push to `main` from one of the required workflows, the
+orchestrator resolves the current `main` SHA and verifies all latest required
+runs for that exact SHA, regardless of the wake-up run's own conclusion. It
+also verifies the triggering SHA before resuming an existing incomplete
+same-SHA release. This makes a delayed event safe even if a newer main push
+superseded it in the Actions concurrency queue. The Docker job
 currently also pushes the mutable `main` image on every main push; that image
 push is not a release gate and must not be mistaken for validation. Immutable
 versioned image publication, if included in this release, must use the

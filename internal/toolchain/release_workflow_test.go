@@ -166,6 +166,7 @@ func TestAutomaticReleaseWorkflowGatesMutationAndPinsDockerSource(t *testing.T) 
 	docker := readRepositoryFile(t, root, ".github", "workflows", "docker-publish.yml")
 	for _, expected := range []string{
 		"workflow_run:",
+		"branches:\n      - main",
 		"- Go",
 		"- Docker validation",
 		"- Skeleton smoke",
@@ -176,9 +177,46 @@ func TestAutomaticReleaseWorkflowGatesMutationAndPinsDockerSource(t *testing.T) 
 		"Resolve current main as the release candidate",
 		"repos/$GH_REPOSITORY/commits/main",
 		"sha: ${{ steps.current-main.outputs.sha }}",
+		"Verify latest required checks for the triggering SHA",
+		"steps.event-required.outputs.validated",
+		"EVENT_VALIDATED: ${{ needs.validate.outputs.event-validated }}",
+		"candidate_release\" == \"draft\"",
+		"candidate_release\" == \"published\"",
+		"only the current validated main SHA may be considered next",
+		"release_state_or_fail()",
+		"if ! release_state \"$tag\"; then",
+		"refusing to plan publication",
+		"has(\"draft\") and (.draft | type == \"boolean\")",
+		"404) candidate_release=\"absent\"",
+		"*) rm -f \"$response_file\"; return 1 ;;",
+		"target_sha=\"$EVENT_SHA\"",
+		"git show \"$TARGET_SHA:release/toolchain-catalog.payload.json\"",
 		"ref: main",
 		"uses: ./.github/actions/verify-required-checks",
 		"git tag -a",
+		"tusk-release-automation:v1",
+		"calculate_next_tag()",
+		"previous_stable_tag()",
+		"tag_is_automation_retry()",
+		"tag_is_automation_retry \"$tag\" \"$EVENT_SHA\"",
+		"tag_is_automation_retry \"$tag\" \"$target_sha\"",
+		"if (( ${#event_tags[@]} > 1 )); then",
+		"event stable tag does not match calculated SemVer",
+		"event tag lacks the exact automation marker and source SHA",
+		"if (( ${#tags_at_sha[@]} > 1 )); then",
+		"multiple stable release tags point at the same source commit",
+		"grep -Fqx \"source-sha:$target_sha\"",
+		"grep -Fqx \"source-sha:$sha\"",
+		"go run ./cmd/tusk-release previous-tag --candidate-tag \"$1\" --expected-sha \"$2\"",
+		"previous_event_tag",
+		"previous_candidate_tag",
+		"expected_event_tag",
+		"expected_tag",
+		"if [[ -n \"$candidate_tag\" ]]; then",
+		"calculated release tag is already occupied",
+		"existing tag is not an automation-created annotated tag for this exact SHA",
+		"concurrent tag is not an automation-created annotated tag for this exact SHA",
+		"grep -Fqx 'tusk-release-automation:v1'",
 		"git push origin",
 		"Preflight official catalog and signing configuration",
 		"uses: ./.github/workflows/release.yml",
@@ -189,6 +227,12 @@ func TestAutomaticReleaseWorkflowGatesMutationAndPinsDockerSource(t *testing.T) 
 			t.Errorf("automatic release workflow is missing contract %q", expected)
 		}
 	}
+	if strings.Contains(workflow, "CONCLUSION: ${{ github.event.workflow_run.conclusion }}") {
+		t.Fatal("a workflow_run is a wake-up signal; exact-SHA required-check results, not its own conclusion, gate release")
+	}
+	if strings.Contains(workflow, "workflow_run:") && !strings.Contains(workflow, "branches:\n      - main") {
+		t.Fatal("workflow_run must filter main events to prevent PR completions replacing the pending serialized wake-up")
+	}
 	if strings.Contains(workflow, "git push --force") || strings.Contains(workflow, "git push -f ") {
 		t.Fatal("automatic release workflow must never force-update a stable tag")
 	}
@@ -197,10 +241,18 @@ func TestAutomaticReleaseWorkflowGatesMutationAndPinsDockerSource(t *testing.T) 
 	if preflight < 0 || tagCreation < 0 || preflight > tagCreation {
 		t.Fatal("release prerequisites must be checked before creating the immutable tag")
 	}
-	for _, expected := range []string{"source-ref:", "publish-main:", "ref: ${{ inputs.source-ref }}", "Recheck current main for mutable main tag", "steps.current-main.outputs.publish == 'true'", "type=raw,value=main"} {
+	for _, expected := range []string{"source-ref:", "publish-main:", "ref: ${{ inputs.source-ref }}", "Recheck current main for mutable main tag", "Preserve existing immutable version image tags", "org.opencontainers.image.revision", "context: git", "steps.current-main.outputs.publish == 'true'", "type=raw,value=main"} {
 		if !strings.Contains(docker, expected) {
 			t.Errorf("Docker publisher is missing exact-source contract %q", expected)
 		}
+	}
+	for _, expected := range []string{"docker buildx imagetools inspect", "docker buildx imagetools inspect --raw", "docker pull --platform", ".manifests[]?", "does not match the validated source SHA", "Could not safely inspect immutable image", "unauthorized|denied|forbidden|authentication required|permission denied"} {
+		if !strings.Contains(docker, expected) {
+			t.Errorf("Docker publisher is missing immutable-tag preservation contract %q", expected)
+		}
+	}
+	if !strings.Contains(docker, `\.(0|[1-9][0-9]*))$`) {
+		t.Fatal("Docker immutable version tag validation must reject empty or leading-zero SemVer components")
 	}
 }
 

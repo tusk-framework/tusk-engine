@@ -205,6 +205,59 @@ func TestGitLogHistoryRange(t *testing.T) {
 	}
 }
 
+func TestPreviousTagSelectsNearestFirstParentStableTag(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(cmd.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.invalid", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.invalid")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return out
+	}
+	runGit("init", "-q")
+	runGit("checkout", "-q", "-b", "main")
+	runGit("commit", "--allow-empty", "-qm", "chore: baseline")
+	runGit("tag", "-a", "v1.0.0", "-m", "Release v1.0.0")
+	runGit("checkout", "-q", "-b", "feature/unreleased")
+	runGit("commit", "--allow-empty", "-qm", "feat: unfinished branch")
+	runGit("tag", "v9.0.0")
+	runGit("checkout", "-q", "main")
+	runGit("commit", "--allow-empty", "-qm", "fix: main patch")
+	runGit("tag", "-a", "v1.1.0", "-m", "Release v1.1.0")
+	runGit("merge", "--no-ff", "-m", "Merge feature branch", "feature/unreleased")
+	runGit("commit", "--allow-empty", "-qm", "feat: next main change")
+	runGit("tag", "-a", "v1.2.0", "-m", "Release v1.2.0")
+	target := strings.TrimSpace(string(runGit("rev-parse", "HEAD")))
+
+	git := func(args ...string) ([]byte, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		return cmd.Output()
+	}
+	var stdout bytes.Buffer
+	err := run([]string{"previous-tag", "--candidate-tag", "v1.2.0", "--expected-sha", target}, &stdout, git)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "tag=v1.1.0\n"; got != want {
+		t.Fatalf("previous stable tag = %q, want %q", got, want)
+	}
+
+	stdout.Reset()
+	if err := run([]string{"previous-tag", "--candidate-tag", "v1.2.0", "--expected-sha", strings.Repeat("0", 40)}, &stdout, git); err == nil {
+		t.Fatal("previous-tag accepted a candidate ref resolving to a different source SHA")
+	}
+	runGit("tag", "v1.2.1", target)
+	stdout.Reset()
+	if err := run([]string{"previous-tag", "--candidate-tag", "v1.2.1", "--expected-sha", target}, &stdout, git); err == nil {
+		t.Fatal("previous-tag accepted a lightweight candidate tag")
+	}
+}
+
 func contains(values []string, value string) bool {
 	for _, candidate := range values {
 		if candidate == value {

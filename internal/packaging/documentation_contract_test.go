@@ -61,6 +61,46 @@ func TestOfflineDocsPackagingContract(t *testing.T) {
 	testEmbeddedDocsFromBuiltBinary(t)
 }
 
+func TestReleaseAutomationDocumentationCoversPolicyAndRecovery(t *testing.T) {
+	guide, err := os.ReadFile("../../docs/user-guide/release-automation.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := string(guide)
+	for _, required := range []string{
+		"workflow_run",
+		"Docker validation",
+		"Skeleton smoke",
+		"BREAKING CHANGE:",
+		"v<version>",
+		"GITHUB_TOKEN",
+		"TUSK_CATALOG_SIGNING_KEY_B64",
+		"incomplete draft",
+		"published release",
+		"rerun one of the required validation workflows",
+		"never moved or overwritten",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("release automation guide is missing %q", required)
+		}
+	}
+
+	index, err := os.ReadFile("../../docs/user-guide/index.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), "release-automation.md") {
+		t.Fatal("offline user-guide index does not link to release automation")
+	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(readme), "docs/user-guide/release-automation.md") {
+		t.Fatal("README does not link to release automation guidance")
+	}
+}
+
 func testEmbeddedDocsFromBuiltBinary(t *testing.T) {
 	t.Helper()
 

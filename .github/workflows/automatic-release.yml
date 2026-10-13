@@ -8,6 +8,8 @@ on:
       - Skeleton smoke
     types:
       - completed
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -25,6 +27,9 @@ jobs:
     outputs:
       accepted: ${{ steps.accepted.outputs.accepted }}
       sha: ${{ steps.current-main.outputs.sha }}
+      event-sha: ${{ steps.event.outputs.sha }}
+      event-validated: ${{ steps.event-required.outputs.validated }}
+      current-validated: ${{ steps.required.outputs.validated }}
     steps:
       - name: Check out trusted default-branch workflow code
         uses: actions/checkout@v5
@@ -41,14 +46,13 @@ jobs:
           HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           EVENT_NAME: ${{ github.event.workflow_run.event }}
-          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           EXPECTED_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_REPOSITORY" != "$EXPECTED_REPOSITORY" || "$HEAD_REPOSITORY" != "$EXPECTED_REPOSITORY" || \
-                "$HEAD_BRANCH" != "main" || "$EVENT_NAME" != "push" || "$CONCLUSION" != "success" || \
+                "$HEAD_BRANCH" != "main" || "$EVENT_NAME" != "push" || \
                 ! "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]; then
             echo "accepted=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -84,9 +88,17 @@ jobs:
           sha: ${{ steps.current-main.outputs.sha }}
           token: ${{ github.token }}
 
+      - name: Verify latest required checks for the triggering SHA
+        id: event-required
+        if: steps.event.outputs.accepted == 'true'
+        uses: ./.github/actions/verify-required-checks
+        with:
+          sha: ${{ steps.event.outputs.sha }}
+          token: ${{ github.token }}
+
       - name: Set accepted validation output
         id: accepted
-        if: steps.event.outputs.accepted == 'true' && steps.required.outputs.validated == 'true'
+        if: steps.event.outputs.accepted == 'true' && (steps.required.outputs.validated == 'true' || steps.event-required.outputs.validated == 'true')
         shell: bash
         run: echo "accepted=true" >> "$GITHUB_OUTPUT"
 
@@ -101,7 +113,7 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       action: ${{ steps.plan.outputs.action }}
       publish-main: ${{ steps.plan.outputs.publish_main }}
-      sha: ${{ needs.validate.outputs.sha }}
+      sha: ${{ steps.plan.outputs.sha }}
     steps:
       - name: Check out trusted default-branch release code
         uses: actions/checkout@v5
@@ -119,14 +131,60 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ needs.validate.outputs.sha }}
+          CURRENT_SHA: ${{ needs.validate.outputs.sha }}
+          EVENT_SHA: ${{ needs.validate.outputs.event-sha }}
+          EVENT_VALIDATED: ${{ needs.validate.outputs.event-validated }}
+          CURRENT_VALIDATED: ${{ needs.validate.outputs.current-validated }}
           GH_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           git fetch --tags origin
           remote_main_sha="$(gh api "repos/$GH_REPOSITORY/commits/main" --jq .sha)"
           stable_tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          mapfile -t tags_at_sha < <(git tag --points-at "$TARGET_SHA" | grep -E "$stable_tag_pattern" | sort -V || true)
+          target_sha=""
+          retry_tag=""
+          tag_is_automation_retry() {
+            local tag="$1" sha="$2" tag_object contents
+            tag_object="$(git cat-file -t "refs/tags/$tag" 2>/dev/null || true)"
+            [[ "$tag_object" == "tag" ]] || return 1
+            contents="$(git for-each-ref --format='%(contents)' "refs/tags/$tag")"
+            grep -Fqx 'tusk-release-automation:v1' <<< "$contents" && grep -Fqx "source-sha:$sha" <<< "$contents"
+          }
+          calculate_next_tag() {
+            local sha="$1" base_tag="${2:-}" previous calculation release version
+            previous="$base_tag"
+            if [[ -z "$previous" ]]; then previous="$(git tag --list 'v*' | grep -E "$stable_tag_pattern" | sort -V | tail -n 1 || true)"; fi
+            [[ -n "$previous" ]] || { echo "No previous stable tag exists; configure an initial stable version before enabling automation." >&2; return 1; }
+            git merge-base --is-ancestor "$previous" "$sha" || { echo "Latest stable tag is not an ancestor of the validated source commit" >&2; return 1; }
+            calculation="$(go run ./cmd/tusk-release --previous-tag "$previous" --target-commit "$sha")"
+            release="$(sed -n 's/^should_release=//p' <<< "$calculation")"
+            [[ "$release" == "true" ]] || return 0
+            version="$(sed -n 's/^version=//p' <<< "$calculation")"
+            printf 'v%s' "$version"
+          }
+          previous_stable_tag() {
+            go run ./cmd/tusk-release previous-tag --candidate-tag "$1" --expected-sha "$2" | sed -n 's/^tag=//p'
+          }
+          if [[ "$EVENT_SHA" != "$remote_main_sha" && "$EVENT_VALIDATED" == "true" ]]; then
+            mapfile -t event_tags < <(git tag --points-at "$EVENT_SHA" | grep -E "$stable_tag_pattern" | sort -V || true)
+            if (( ${#event_tags[@]} > 1 )); then
+              echo "multiple stable release tags point at the triggering source commit; refusing ambiguous retry" >&2
+              exit 1
+            fi
+            for tag in "${event_tags[@]}"; do
+              previous_event_tag="$(previous_stable_tag "$tag" "$EVENT_SHA")"
+              expected_event_tag="$(calculate_next_tag "$EVENT_SHA" "$previous_event_tag")"
+              if [[ "$tag" != "$expected_event_tag" ]]; then
+                echo "event stable tag does not match calculated SemVer; refusing retry" >&2
+                exit 1
+              fi
+              if ! tag_is_automation_retry "$tag" "$EVENT_SHA"; then
+                echo "event tag lacks the exact automation marker and source SHA" >&2
+                exit 1
+              fi
+              retry_tag="$tag"
+            done
+          fi
           candidate_tag=""
           candidate_sha=""
           candidate_release="unknown"
@@ -154,37 +212,89 @@ jobs:
             esac
             rm -f "$response_file"
           }
+          release_state_or_fail() {
+            local tag="$1"
+            if ! release_state "$tag"; then
+              echo "Could not safely determine release state for $tag; refusing to plan publication" >&2
+              exit 1
+            fi
+          }
 
+          if [[ -n "$retry_tag" ]]; then
+            release_state_or_fail "$retry_tag"
+            if [[ "$candidate_release" == "draft" || "$candidate_release" == "absent" ]]; then
+              target_sha="$EVENT_SHA"
+            elif [[ "$candidate_release" == "published" ]]; then
+              echo "event SHA $EVENT_SHA already has a published release; only the current validated main SHA may be considered next"
+              candidate_release="unknown"
+            else
+              echo "unexpected release state for retry tag $retry_tag" >&2
+              exit 1
+            fi
+          fi
+          if [[ -z "$target_sha" && "$remote_main_sha" == "$CURRENT_SHA" && "$CURRENT_VALIDATED" == "true" ]]; then
+            target_sha="$CURRENT_SHA"
+          elif [[ -z "$target_sha" && "$remote_main_sha" == "$EVENT_SHA" && "$EVENT_VALIDATED" == "true" ]]; then
+            target_sha="$EVENT_SHA"
+          fi
+          if [[ -z "$target_sha" ]]; then
+            echo "action=skip-stale" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "publish_main=false" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mapfile -t tags_at_sha < <(git tag --points-at "$target_sha" | grep -E "$stable_tag_pattern" | sort -V || true)
           if (( ${#tags_at_sha[@]} > 0 )); then
-            candidate_tag="${tags_at_sha[${#tags_at_sha[@]}-1]}"
-            candidate_sha="$TARGET_SHA"
-            release_state "$candidate_tag"
+            if (( ${#tags_at_sha[@]} > 1 )); then
+              echo "multiple stable release tags point at the same source commit; refusing ambiguous retry" >&2
+              exit 1
+            fi
+            expected_tag=""
+            for tag in "${tags_at_sha[@]}"; do
+              previous_candidate_tag="$(previous_stable_tag "$tag" "$target_sha")"
+              expected_tag="$(calculate_next_tag "$target_sha" "$previous_candidate_tag")"
+              if [[ -n "$expected_tag" && "$tag" == "$expected_tag" ]]; then
+                if ! tag_is_automation_retry "$tag" "$target_sha"; then
+                  echo "candidate tag lacks the exact automation marker and source SHA" >&2
+                  exit 1
+                fi
+                candidate_tag="$tag"
+              fi
+            done
+            if [[ -n "$candidate_tag" ]]; then
+              candidate_sha="$target_sha"
+              release_state_or_fail "$candidate_tag"
+            elif [[ -n "$expected_tag" ]]; then
+              echo "A stable tag exists for the validated SHA but does not match the calculated SemVer; refusing to release" >&2
+              exit 1
+            fi
           else
-            if [[ "$remote_main_sha" != "$TARGET_SHA" ]]; then
+            if [[ "$remote_main_sha" != "$target_sha" ]]; then
               plan="$(go run ./cmd/tusk-release automatic-plan \
-                --validated-sha "$TARGET_SHA" \
+                --validated-sha "$target_sha" \
                 --remote-main-sha "$remote_main_sha")"
               echo "action=$(sed -n 's/^action=//p' <<< "$plan")" >> "$GITHUB_OUTPUT"
               echo "tag=$(sed -n 's/^tag=//p' <<< "$plan")" >> "$GITHUB_OUTPUT"
               echo "publish_main=false" >> "$GITHUB_OUTPUT"
+              echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            previous_tag="$(git tag --list 'v*' | grep -E "$stable_tag_pattern" | sort -V | tail -n 1 || true)"
-            if [[ -z "$previous_tag" ]]; then
-              echo "No previous stable tag exists; configure an initial stable version before enabling automation." >&2
-              exit 1
-            fi
-            calculation="$(go run ./cmd/tusk-release --previous-tag "$previous_tag" --target-commit "$TARGET_SHA")"
-            should_release="$(sed -n 's/^should_release=//p' <<< "$calculation")"
-            if [[ "$should_release" == "true" ]]; then
-              version="$(sed -n 's/^version=//p' <<< "$calculation")"
-              next_tag="v$version"
+            next_tag="$(calculate_next_tag "$target_sha")"
+            if [[ -n "$next_tag" ]]; then
               remote_tag="$(git ls-remote --tags origin "refs/tags/$next_tag" "refs/tags/$next_tag^{}")"
               if [[ -n "$remote_tag" ]]; then
                 candidate_tag="$next_tag"
                 git fetch --no-tags origin "refs/tags/$candidate_tag:refs/tusk-release/$candidate_tag"
                 candidate_sha="$(git rev-parse "refs/tusk-release/$candidate_tag^{commit}")"
-                release_state "$candidate_tag"
+                candidate_object="$(git cat-file -t "refs/tusk-release/$candidate_tag")"
+                candidate_contents="$(git for-each-ref --format='%(contents)' "refs/tusk-release/$candidate_tag")"
+                if [[ "$candidate_object" != "tag" ]] || ! grep -Fqx 'tusk-release-automation:v1' <<< "$candidate_contents" || ! grep -Fqx "source-sha:$target_sha" <<< "$candidate_contents"; then
+                  echo "calculated release tag is already occupied by a tag not created by this workflow for the exact SHA" >&2
+                  exit 1
+                fi
+                release_state_or_fail "$candidate_tag"
               fi
             fi
           fi
@@ -193,7 +303,7 @@ jobs:
             next_tag=""
           fi
           plan="$(go run ./cmd/tusk-release automatic-plan \
-            --validated-sha "$TARGET_SHA" \
+            --validated-sha "$target_sha" \
             --remote-main-sha "$remote_main_sha" \
             --next-tag "$next_tag" \
             --candidate-tag "$candidate_tag" \
@@ -202,15 +312,17 @@ jobs:
           action="$(sed -n 's/^action=//p' <<< "$plan")"
           tag="$(sed -n 's/^tag=//p' <<< "$plan")"
           publish_main=false
-          if [[ "$remote_main_sha" == "$TARGET_SHA" ]]; then publish_main=true; fi
+          if [[ "$remote_main_sha" == "$target_sha" ]]; then publish_main=true; fi
           echo "action=$action" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "publish_main=$publish_main" >> "$GITHUB_OUTPUT"
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
 
       - name: Preflight official catalog and signing configuration
         if: steps.plan.outputs.action == 'create' || steps.plan.outputs.action == 'resume'
         shell: bash
         env:
+          TARGET_SHA: ${{ steps.plan.outputs.sha }}
           TUSK_CATALOG_SIGNING_KEY_B64: ${{ secrets.TUSK_CATALOG_SIGNING_KEY_B64 }}
           TUSK_CATALOG_KEY_ID: ${{ vars.TUSK_CATALOG_KEY_ID }}
           TUSK_CATALOG_TRUST_ANCHORS_B64: ${{ vars.TUSK_CATALOG_TRUST_ANCHORS_B64 }}
@@ -219,9 +331,11 @@ jobs:
           test -n "$TUSK_CATALOG_SIGNING_KEY_B64"
           test -n "$TUSK_CATALOG_KEY_ID"
           test -n "$TUSK_CATALOG_TRUST_ANCHORS_B64"
-          go run ./cmd/tusk-catalog validate --download --payload release/toolchain-catalog.payload.json
+          payload="$RUNNER_TEMP/preflight-catalog-payload.json"
+          git show "$TARGET_SHA:release/toolchain-catalog.payload.json" > "$payload"
+          go run ./cmd/tusk-catalog validate --download --payload "$payload"
           go run ./cmd/tusk-catalog sign \
-            --payload release/toolchain-catalog.payload.json \
+            --payload "$payload" \
             --catalog "$RUNNER_TEMP/preflight-catalog.json" \
             --provenance "$RUNNER_TEMP/preflight-provenance.json"
 
@@ -232,7 +346,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.plan.outputs.tag }}
-          TARGET_SHA: ${{ needs.validate.outputs.sha }}
+          TARGET_SHA: ${{ steps.plan.outputs.sha }}
         run: |
           set -euo pipefail
           remote_main_sha="$(gh api "repos/$GH_REPOSITORY/commits/main" --jq .sha)"
@@ -248,9 +362,18 @@ jobs:
               echo "release tag already exists for a different commit" >&2
               exit 1
             fi
+            existing_object="$(git cat-file -t "refs/tusk-release/$RELEASE_TAG")"
+            existing_contents="$(git for-each-ref --format='%(contents)' "refs/tusk-release/$RELEASE_TAG")"
+            if [[ "$existing_object" != "tag" ]] || ! grep -Fqx 'tusk-release-automation:v1' <<< "$existing_contents" || ! grep -Fqx "source-sha:$TARGET_SHA" <<< "$existing_contents"; then
+              echo "existing tag is not an automation-created annotated tag for this exact SHA" >&2
+              exit 1
+            fi
             exit 0
           fi
-          git tag -a "$RELEASE_TAG" "$TARGET_SHA" -m "Tusk Engine $RELEASE_TAG"
+          git tag -a "$RELEASE_TAG" "$TARGET_SHA" \
+            -m "Tusk Engine $RELEASE_TAG" \
+            -m "tusk-release-automation:v1" \
+            -m "source-sha:$TARGET_SHA"
           if ! git push origin "refs/tags/$RELEASE_TAG"; then
             remote_tag="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
             if [[ -z "$remote_tag" ]]; then
@@ -261,6 +384,12 @@ jobs:
             raced_sha="$(git rev-parse 'refs/tusk-release/race-check^{commit}')"
             if [[ "$raced_sha" != "$TARGET_SHA" ]]; then
               echo "release tag was concurrently created for a different commit" >&2
+              exit 1
+            fi
+            raced_object="$(git cat-file -t refs/tusk-release/race-check)"
+            raced_contents="$(git for-each-ref --format='%(contents)' refs/tusk-release/race-check)"
+            if [[ "$raced_object" != "tag" ]] || ! grep -Fqx 'tusk-release-automation:v1' <<< "$raced_contents" || ! grep -Fqx "source-sha:$TARGET_SHA" <<< "$raced_contents"; then
+              echo "concurrent tag is not an automation-created annotated tag for this exact SHA" >&2
               exit 1
             fi
           fi

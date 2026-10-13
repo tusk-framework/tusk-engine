@@ -134,7 +134,7 @@
 
 - [ ] **Step 1: Add orchestration contract tests/scripts** for no release, successful release, `main` advancing while queued, tag collision, already-published release, existing same-SHA tag with incomplete draft, and retry after partial publication. Model candidate selection separately from mutation, including retry when the same SHA is already tagged and is now the latest stable tag.
 - [ ] **Step 2: Run those tests** and confirm the stale-SHA/tag-race cases fail before workflow implementation.
-- [ ] **Step 3: Add a trusted `workflow_run` aggregator** for Go, Docker validation, and Skeleton smoke. Accept only same-repository successful `push` runs on `main` as wake-up signals; resolve current remote `main`, then call Task 4's verifier for that exact SHA. This handles replaced pending events without losing a green latest commit. Never checkout or execute the triggering commit/ref. Serialize release jobs (`cancel-in-progress: false`), keep calculation read-only, and scope tag/release mutation to a job with `contents: write`.
+- [ ] **Step 3: Add a trusted `workflow_run` aggregator** for Go, Docker validation, and Skeleton smoke. Treat completed same-repository `push` runs on `main` as wake-up signals regardless of the individual event conclusion; resolve current remote `main`, then call Task 4's verifier for that exact SHA. Also verify the triggering SHA so a matching incomplete draft can resume after `main` advances. This handles replaced pending events without losing a green latest commit. Never checkout or execute the triggering commit/ref. Serialize release jobs (`cancel-in-progress: false`), keep calculation read-only, and scope tag/release mutation to a job with `contents: write`.
 - [ ] **Step 4: Reconcile an existing candidate tag before calculating a new version.** If it points to the current-main candidate SHA, resume that tag's draft publication (the shared publisher safely no-ops if already published); if it points elsewhere, fail without mutation. For a new tag, re-fetch remote tags and `main`, skip stale candidates, and fail on a conflicting target tag.
 - [ ] **Step 5: Create an annotated version tag at the exact validated current-main SHA** and call the shared publisher within the same workflow run, without relying on tag push to trigger Actions.
 - [ ] **Step 6: Implement retry rules**: same tag + same SHA + incomplete draft can resume idempotently; an already-published release is a no-op; different SHA or conflicting assets fail without mutation. Never calculate the next version from a range that omits an already-created candidate tag for this same SHA.
@@ -148,15 +148,17 @@
 **Files:**
 - Modify: `README.md`
 - Modify: `CONTRIBUTING.md`
-- Modify: `docs/user-guide/releasing.md`
 - Create: `docs/user-guide/release-automation.md`
+- Modify: `docs/user-guide/index.md`
+- Modify: `docs/embed_test.go`
+- Modify: `internal/packaging/documentation_contract_test.go`
 
 **Interfaces:**
 - Produces: operator documentation for version calculation, skipped release conditions, immutable tag behavior, failed publication recovery, credential requirements, and Docker tag behavior.
 
 - [ ] **Step 1: Add documentation checks** for every policy and recovery case in the spec, including that no PAT is needed and secrets remain unprinted.
 - [ ] **Step 2: Run documentation tests/link checks** and verify they fail if release policy/recovery sections are absent.
-- [ ] **Step 3: Document automatic release behavior** and update README/manual release guidance to explain automatic retries through the trusted aggregator; direct tag/dispatch publication is intentionally unsupported.
+- [ ] **Step 3: Document automatic release behavior** in the README, contribution guide, and versioned offline user guide; explain retries through the trusted aggregator and that direct tag/dispatch publication is intentionally unsupported.
 - [ ] **Step 4: Review workflows and docs together** against all 13 acceptance criteria in the spec; record any criterion that cannot be exercised without GitHub-hosted integration as a manual validation step.
 - [ ] **Step 5: Run `go test ./...`, `go vet ./...`, workflow YAML lint, and `goreleaser check`** with pinned/local tooling as available.
 - [ ] **Step 6: Commit** as `docs: explain automated engine release lifecycle`.

@@ -14,6 +14,7 @@ import (
 )
 
 var stableTagPattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+var stableReleaseTagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 var commitSHA1Pattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 var commitSHA256Pattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
@@ -45,6 +46,9 @@ func run(args []string, stdout io.Writer, git gitRunner) error {
 	if len(args) > 0 && args[0] == "automatic-plan" {
 		return runAutomaticPlan(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "previous-tag" {
+		return runPreviousTag(args[1:], stdout, git)
+	}
 
 	flags := flag.NewFlagSet("tusk-release", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -73,6 +77,80 @@ func run(args []string, stdout io.Writer, git gitRunner) error {
 	}
 	outputLine := fmt.Sprintf("version=%s\nshould_release=%t\n", version, shouldRelease)
 	_, err = io.WriteString(stdout, outputLine)
+	return err
+}
+
+func runPreviousTag(args []string, stdout io.Writer, git gitRunner) error {
+	flags := flag.NewFlagSet("previous-tag", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	candidateTag := flags.String("candidate-tag", "", "stable release tag whose first-parent predecessor is needed")
+	expectedSHA := flags.String("expected-sha", "", "expected commit resolved by the candidate tag")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("invalid arguments: %w", err)
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	if !stableReleaseTagPattern.MatchString(*candidateTag) {
+		return errors.New("candidate tag must be a stable vMAJOR.MINOR.PATCH tag")
+	}
+	if err := validateCommit(*expectedSHA); err != nil {
+		return fmt.Errorf("invalid expected SHA: %w", err)
+	}
+	tagType, err := git("cat-file", "-t", "refs/tags/"+*candidateTag)
+	if err != nil {
+		return fmt.Errorf("inspect candidate tag: %w", err)
+	}
+	if strings.TrimSpace(string(tagType)) != "tag" {
+		return errors.New("candidate stable release tag must be annotated")
+	}
+	candidateCommit, err := git("rev-parse", "--verify", *candidateTag+"^{commit}")
+	if err != nil {
+		return fmt.Errorf("resolve candidate tag: %w", err)
+	}
+	candidateSHA := strings.TrimSpace(string(candidateCommit))
+	if candidateSHA != *expectedSHA {
+		return errors.New("candidate tag does not resolve to the expected source SHA")
+	}
+	history, err := git("rev-list", "--first-parent", strings.TrimSpace(string(candidateCommit)))
+	if err != nil {
+		return fmt.Errorf("read candidate first-parent history: %w", err)
+	}
+	commits := strings.Fields(string(history))
+	for _, commit := range commits[1:] {
+		output, err := git("tag", "--points-at", commit)
+		if err != nil {
+			return fmt.Errorf("read tags at commit %s: %w", commit, err)
+		}
+		var stableTags []string
+		for _, tag := range strings.Fields(string(output)) {
+			if stableReleaseTagPattern.MatchString(tag) {
+				tagType, err := git("cat-file", "-t", "refs/tags/"+tag)
+				if err != nil {
+					return fmt.Errorf("inspect previous stable tag %s: %w", tag, err)
+				}
+				if strings.TrimSpace(string(tagType)) != "tag" {
+					return fmt.Errorf("previous stable release tag %s must be annotated", tag)
+				}
+				tagCommit, err := git("rev-parse", "--verify", "refs/tags/"+tag+"^{commit}")
+				if err != nil {
+					return fmt.Errorf("resolve previous stable tag %s: %w", tag, err)
+				}
+				if strings.TrimSpace(string(tagCommit)) != commit {
+					return fmt.Errorf("previous stable tag %s does not resolve to the first-parent commit being examined", tag)
+				}
+				stableTags = append(stableTags, tag)
+			}
+		}
+		if len(stableTags) > 1 {
+			return fmt.Errorf("multiple stable release tags point at first-parent commit %s", commit)
+		}
+		if len(stableTags) == 1 {
+			_, err := fmt.Fprintf(stdout, "tag=%s\n", stableTags[0])
+			return err
+		}
+	}
+	_, err = io.WriteString(stdout, "tag=\n")
 	return err
 }
 
