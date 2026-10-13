@@ -136,11 +136,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          context: git
+          context: workflow
           images: ${{ inputs.image-name }}
           tags: |
             ${{ steps.current-main.outputs.publish == 'true' && 'type=raw,value=main' || '' }}
             ${{ steps.immutable-tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.source-ref }}
 
       - name: Build and push mutable main image
         uses: docker/build-push-action@v7
